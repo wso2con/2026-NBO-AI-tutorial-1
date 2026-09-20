@@ -1,16 +1,5 @@
 [
   {
-    "kind": "refund",
-    "ref": "refund_0001",
-    "order_id": "1243",
-    "customer_id": "cust_001",
-    "amount_usd": 58.0,
-    "refund_percentage": 1.0,
-    "reason": "damaged_item_full_refund",
-    "actor_agent_id": "cs-agent-v0",
-    "timestamp": "2026-05-13T09:20:00Z"
-  },
-  {
     "kind": "ticket_normal",
     "ticket_id": "TICKET-1001",
     "order_id": null,

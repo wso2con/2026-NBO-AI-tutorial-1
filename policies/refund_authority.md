@@ -1,10 +1,10 @@
 ---
 id: refund_authority
-title: Refund authority limits
+title: Refund authority limits and when to escalate for approval
 keywords: [refund, refund limit, high value, approval, escalate, cap]
 ---
 
-# Refund authority limits
+# Refund authority limits and when to escalate for approval
 
 AI agents may issue refunds up to their scoped cap (the `refund_cap_usd` field
 in their `agent-profile.yaml`; default $200). Refunds above the cap **MUST** be

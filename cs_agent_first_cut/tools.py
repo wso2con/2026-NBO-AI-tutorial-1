@@ -234,7 +234,7 @@ from policies.search import search as _policy_search  # noqa: E402
 
 @tool
 def search_policy_kb(query: str) -> list[dict]:
-    """Search the policyknowledge base."""
+    """Search the policy knowledge base."""
     return _policy_search(query)
 
 

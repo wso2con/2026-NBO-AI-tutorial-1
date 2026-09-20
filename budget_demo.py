@@ -258,13 +258,18 @@ def investigation_steps(
     customer = client.get_customer(customer_id)
     customer_observation: Any
     customer_tool: str
+    # The engineered loop reads policy in two deliberate steps (list then
+    # fetch by id); the first-cut loop still guesses a search query.
+    policy_tool: str
     if variant == "first_cut":
         customer_tool = "get_customer_verified"
+        policy_tool = "search_policy_kb"
         customer_observation = customer.verified if customer else False
         refunds = client.get_refund_history_legacy(customer_id)
         tickets = client.get_open_tickets_legacy(customer_id)
     else:
         customer_tool = "lookup_customer"
+        policy_tool = "get_policy"
         customer_observation = (
             customer.model_dump() if customer else {"error": "customer_not_found"}
         )
@@ -312,8 +317,10 @@ def investigation_steps(
         ),
         _step(
             "shipping_policy",
-            "search_policy_kb",
-            {"query": "shipping delay credit"},
+            policy_tool,
+            {"query": "shipping delay credit"}
+            if variant == "first_cut"
+            else {"policy_id": "shipping_delay"},
             search("shipping delay credit"),
             "shipping-delay policy",
         ),
@@ -333,8 +340,10 @@ def investigation_steps(
         ),
         _step(
             "refund_policy",
-            "search_policy_kb",
-            {"query": "refund authority limit"},
+            policy_tool,
+            {"query": "refund authority limit"}
+            if variant == "first_cut"
+            else {"policy_id": "refund_authority"},
             search("refund authority limit"),
             "refund-authority policy",
         ),

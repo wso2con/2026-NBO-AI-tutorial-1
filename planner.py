@@ -140,7 +140,8 @@ def _tools_catalogue_fallback() -> str:
 - cancel_order — cancel (only if not shipped). Does NOT auto-refund.
 - issue_refund — refund as a percentage of the order total
 - escalate_to_human — open a human ticket
-- search_policy_kb — search the policy knowledge base
+- list_policies — list every policy in the knowledge base
+- get_policy — fetch one policy in full by id
 - append_memory — one short note to this customer's episodic memory
 - compact_memory — rewrite the episodic memory file"""
 

@@ -216,7 +216,7 @@ def record_observation(
             run.verified_criteria["refund_history_observed"] = True
         if tool_name == "get_open_tickets":
             run.verified_criteria["tickets_observed"] = True
-        if tool_name in {"search_policy_kb", "search_kb"}:
+        if tool_name in {"get_policy", "search_policy_kb", "search_kb"}:
             run.verified_criteria["policy_observed"] = True
         if tool_name in {"issue_refund", "modify_order"}:
             run.verified_criteria["refund_committed"] = True

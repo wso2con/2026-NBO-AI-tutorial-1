@@ -22,16 +22,11 @@ from loop_state import (
     record_observation,
     record_tool_call,
     validate_response,
-    verify_postconditions,
 )
 from cs_agent_engineered.agent.skill_contracts import load_skill_contract
 from mocks.client import CustomerSupportClient, reset_data_files
 
 EXPECTED_BEHAVIORS = {
-    "foundations-see-loop": {
-        "first_cut": "Exposes the basic model, tool, observation, and stop sequence.",
-        "engineered": "Exposes the same basic sequence with harness-owned run state.",
-    },
     "tools-refund-history": {
         "first_cut": "Receives a deeply nested legacy envelope with noisy metadata and renamed business fields.",
         "engineered": "Receives a focused refund observation whose fields can directly inform the next model call.",
@@ -45,8 +40,8 @@ EXPECTED_BEHAVIORS = {
         "engineered": "Cancels first and refunds the remaining 80%, leaving the order at the 90% policy entitlement.",
     },
     "context-repeat-damage": {
-        "first_cut": "Receives the prior payout wrapped in a legacy envelope, where the fact that #1243 is already settled is easy to skip past.",
-        "engineered": "Receives a typed observation that states the prior refund as a percentage of the order, alongside the damaged-on-arrival status.",
+        "first_cut": "Receives the refund history wrapped in a legacy envelope, where what has and has not been paid out on #1243 is easy to skip past.",
+        "engineered": "Receives a typed observation that states refunds as a percentage of the order, alongside the damaged-on-arrival status.",
     },
     "memory-promise-lapse": {
         "first_cut": "Loses the travel deadline and prior promise when conversation history ends.",
@@ -156,43 +151,7 @@ def run_suite(lab_root: Path) -> dict[str, Any]:
     baseline = CustomerSupportClient(agent_id="eval_baseline")
     order = baseline.get_order("1234")
 
-    # 1. Foundations: both implementations expose the basic loop. The
-    # engineered version adds stronger decisions later in the suite; the
-    # first-cut version is not expected to fail this introductory scenario.
-    visible_loop = RunStore().start(
-        run_id="eval-visible-loop",
-        scenario_id="foundations-see-loop",
-        customer_id="cust_001",
-        goal="investigate an order",
-    )
-    visible_loop.success_criteria = ["order_observed"]
-    record_iteration(visible_loop)
-    record_tool_call(visible_loop, "get_order")
-    record_observation(
-        visible_loop,
-        tool_name="get_order",
-        observation=order.model_dump() if order else {"error": "order_not_found"},
-        is_error=order is None,
-    )
-    loop_verified, loop_missing = verify_postconditions(visible_loop)
-    results.append(
-        _result(
-            "foundations-see-loop",
-            "See the loop",
-            loop_verified,
-            loop_verified,
-            outcome_assertions=[
-                _assertion("A backend observation grounds the answer", loop_verified),
-            ],
-            trajectory_assertions=[
-                _assertion("A model iteration is recorded", visible_loop.iteration_count == 1),
-                _assertion("A tool invocation is recorded", visible_loop.tool_call_count == 1),
-            ],
-            evidence={"run": visible_loop.dump(), "missing_criteria": loop_missing},
-        )
-    )
-
-    # 2. Tool observations: the first-cut adapter returns a SOAP-shaped legacy
+    # 1. Tool observations: the first-cut adapter returns a SOAP-shaped legacy
     # envelope. The engineered service returns the same business fact in a
     # compact, action-oriented schema suitable for the next model call.
     legacy_refunds = baseline.get_refund_history_legacy("cust_001")
@@ -234,7 +193,7 @@ def run_suite(lab_root: Path) -> dict[str, Any]:
         )
     )
 
-    # 3. Skills: the address procedure adds cross-order behavior that is not
+    # 2. Skills: the address procedure adds cross-order behavior that is not
     # already obvious from the base prompt.
     address_skill = (
         lab_root
@@ -496,31 +455,32 @@ def run_suite(lab_root: Path) -> dict[str, Any]:
         )
     )
 
-    # Context: a returning customer asking again about an order the ledger has
-    # already settled. Both loops can reach every fact they need through their
-    # own tools; what differs is the shape of the observation each one gets
-    # back. Deterministic checks only - the live behaviour is the demo.
+    # Context: a returning customer writing in about an order that arrived
+    # damaged and has never been paid out. Both loops can reach every fact they
+    # need through their own tools; what differs is the shape of the
+    # observation each one gets back. Deterministic checks only - the live
+    # behaviour is the demo.
     damaged_order = baseline.get_order("1243")
     alice_refunds = baseline.get_refund_history("cust_001")
     refunds_on_1243 = [e for e in alice_refunds if e.get("order_id") == "1243"]
     already_refunded_pct = sum(
         float(e.get("refund_percentage") or 0.0) for e in refunds_on_1243
     )
-    settled_in_full = abs(already_refunded_pct - 1.0) < 1e-9
+    not_yet_settled = abs(already_refunded_pct) < 1e-9
     order_is_damaged = bool(
         damaged_order
         and damaged_order.damaged
         and damaged_order.status == "delivered_damaged"
     )
-    # The engineered observation types the prior payout as a percentage field;
-    # the first-cut envelope buries the same fact under adapter metadata.
+    # The engineered observation types every payout as a percentage field; the
+    # first-cut envelope buries the same facts under adapter metadata.
     legacy_alice = baseline.get_refund_history_legacy("cust_001")
     engineered_exposes_percentage = bool(
-        refunds_on_1243 and "refund_percentage" in refunds_on_1243[0]
+        alice_refunds and "refund_percentage" in alice_refunds[0]
     )
     first_cut_buries_it = "@xmlns" in legacy_alice and "RefundEnvelope" in legacy_alice
     engineered_context_ok = bool(
-        settled_in_full and order_is_damaged and engineered_exposes_percentage
+        not_yet_settled and order_is_damaged and engineered_exposes_percentage
     )
     results.append(
         _result(
@@ -530,11 +490,11 @@ def run_suite(lab_root: Path) -> dict[str, Any]:
             engineered_context_ok,
             outcome_assertions=[
                 _assertion("Order #1243 is flagged damaged on arrival", order_is_damaged),
-                _assertion("The ledger already settles #1243 in full", settled_in_full),
+                _assertion("The ledger holds no payout against #1243", not_yet_settled),
             ],
             trajectory_assertions=[
                 _assertion(
-                    "Engineered observation types the prior payout as refund_percentage",
+                    "Engineered observation types payouts as refund_percentage",
                     engineered_exposes_percentage,
                 ),
                 _assertion(
@@ -625,7 +585,7 @@ def run_suite(lab_root: Path) -> dict[str, Any]:
         and order.status in {"in_transit", "in_transit_delayed"}
         and "already shipped" in cancel_text
         and "cancellation is not allowed" in cancel_text
-        and "search_policy_kb" in cancel_text
+        and "get_policy" in cancel_text
     )
     first_tools_text = (lab_root / "cs_agent_first_cut" / "tools.py").read_text(encoding="utf-8")
     first_conditional_ok = (
@@ -643,7 +603,7 @@ def run_suite(lab_root: Path) -> dict[str, Any]:
             ],
             trajectory_assertions=[
                 _assertion("Procedure checks shipping state before the write", "Check status" in cancel_text),
-                _assertion("Procedure requires policy evidence", "search_policy_kb" in cancel_text),
+                _assertion("Procedure requires policy evidence", "get_policy" in cancel_text),
             ],
             evidence={
                 "first_cut_overloaded_modify_order_present": "def modify_order" in first_tools_text,
@@ -822,12 +782,12 @@ def run_suite(lab_root: Path) -> dict[str, Any]:
     )
     record_tool_call(
         damaged_engineered,
-        "search_policy_kb",
-        {"query": "damaged item photo evidence return label"},
+        "get_policy",
+        {"policy_id": "damaged_item"},
     )
     record_observation(
         damaged_engineered,
-        tool_name="search_policy_kb",
+        tool_name="get_policy",
         observation={"policy": "damaged_item"},
     )
     record_tool_call(
@@ -917,7 +877,7 @@ def run_suite(lab_root: Path) -> dict[str, Any]:
     late_engineered.verified_criteria["procedure_loaded"] = True
     for tool_name, args, observation in (
         ("get_order", {"order_id": "1234"}, {"status": "in_transit_delayed"}),
-        ("search_policy_kb", {"query": "shipping delay credit"}, {"percentage": 0.10}),
+        ("get_policy", {"policy_id": "shipping_delay"}, {"percentage": 0.10}),
         ("get_refund_history", {"customer_id": "cust_001"}, []),
         (
             "issue_refund",
@@ -967,7 +927,6 @@ def run_suite(lab_root: Path) -> dict[str, Any]:
         scenario_id: index
         for index, scenario_id in enumerate(
             (
-                "foundations-see-loop",
                 "context-repeat-damage",
                 "tools-refund-history",
                 "tools-net-refund",

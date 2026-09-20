@@ -305,13 +305,13 @@ def issue_refund(
 
     Procedure the agent MUST follow (otherwise audit will flag the call):
 
-      1. Call `search_policy_kb` for `refund_authority` FIRST. It states
+      1. Call `get_policy("refund_authority")` FIRST. It states
          your dollar cap, the anti-split rule, and that over-cap refunds
          must be escalated as a single ticket (not retried smaller).
          Knowing the cap up front lets you short-circuit obvious over-cap
          requests straight to escalation without spending tool calls on
          category / history math you won't use.
-      2. Call `search_policy_kb` for `refund_calculation` to get the
+      2. Call `get_policy("refund_calculation")` to get the
          percentage for the refund category (damaged / cancellation /
          shipping_delay / return_window). Do NOT pick a number from memory.
       3. Call `get_refund_history(customer_id)`, filter entries by
@@ -420,7 +420,7 @@ def escalate_to_human(
       ❌ BAD:  "Customer: Alice Chen, standard tier. Orders touched:
                 #1234. Audit: refund_0002 store credit $10 issued
                 2026-05-16 by cs-agent-engineered. What I did: get_order,
-                get_refund_history, search_policy_kb (shipping_delay).
+                get_refund_history, get_policy (shipping_delay).
                 Requested action: human review to approve refund to card
                 OR offer replacement..."
 

@@ -105,7 +105,7 @@ def append_memory(customer_id: str, note: str) -> dict:
         status — memory may be stale)
       - Customer tier / tenure / contact (use `lookup_customer`)
       - Order status / lateness / damage flag (use `get_order`)
-      - Policy citations (use `search_policy_kb`)
+      - Policy citations (use `get_policy`)
 
     Concrete example — Alice complained #1234 was late; you issued a $10
     shipping_delay credit.
@@ -123,7 +123,7 @@ def append_memory(customer_id: str, note: str) -> dict:
     a tool call. The GOOD version captures only the promise made and the
     tone — the two things tools can't surface. Procedural follow-up advice
     ("if she follows up, trace + escalate per policy") is policy recap and
-    does NOT belong here — `handle-refund` + `search_policy_kb` cover it.
+    does NOT belong here — `handle-refund` + `get_policy` cover it.
 
     `customer_id` is bound by the harness; pass an empty string or any
     placeholder"""

@@ -1,10 +1,10 @@
 ---
 id: shipping_delay
-title: Shipping delay compensation
+title: Compensation for late or delayed deliveries
 keywords: [delay, delayed, late, shipping, tracking, where is my order]
 ---
 
-# Shipping delay compensation
+# Compensation for late or delayed deliveries
 
 Orders delayed by more than 3 business days qualify for a **$10 store credit**.
 Delays over 7 business days qualify for **$25 store credit**.

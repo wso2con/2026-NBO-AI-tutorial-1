@@ -51,7 +51,7 @@ export function SystemPromptDrawer({ content, loading, error }: Props) {
             // needs restarting, not the agent fixing.
             <div className="text-muted-foreground">
               This agent service didn't report a system prompt. It's running an
-              older build — restart it with{" "}
+              older build, so restart it with{" "}
               <span className="font-mono">make dev</span>.
             </div>
           )}

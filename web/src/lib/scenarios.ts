@@ -16,15 +16,10 @@ export interface DemoScenario {
 
 export const SCENARIOS: DemoScenario[] = [
   {
-    id: "foundations-see-loop", section: 0, section_title: "Try it", title: "Try it",
-    goal: "Cold open. Send the same request to both loops and watch it become model decisions, tool calls, observations, state updates, and a semantic exit. Nothing is enabled yet — this is the baseline both sides start from.",
-    customer_id: "cust_001", prompts: [{ text: "Cancel my order for the water bottle set please. The delivery is taking too long." }],
-  },
-  {
-    id: "context-repeat-damage", section: 1, section_title: "Context", title: "A returning customer with history",
-    goal: "Context only — leave Skills, memory and the planner OFF. Alice's order #1243 (8-cup glass French press, $58) arrived damaged, and the ledger already records a full 100% refund against it from 2026-05-13. She is asking for her money back again. Everything needed to handle this correctly is available to both loops through their own tools: the order status, the damaged flag, the prior refund, and the damaged-goods policy. Watch what each loop actually reads before it decides, and what it writes afterwards.",
+    id: "context-repeat-damage", section: 0, section_title: "Try it", title: "A returning customer with history",
+    goal: "Alice's order #1243, an 8-cup glass French press costing $58, arrived damaged. She is writing in to ask for her money back. Policy does not allow a refund on a damaged item until a photo of the damage is in hand, and a return label has to go out first.",
     customer_id: "cust_001", prompts: [
-      { note: "Leave all toggles OFF on both sides. Reset first so the ledger starts clean.", text: "The French press you sent arrived smashed. I would like my money back please." },
+      { text: "The French press you sent arrived smashed. I would like my money back please." },
     ],
   },
   {
@@ -34,7 +29,7 @@ export const SCENARIOS: DemoScenario[] = [
   },
   {
     id: "tools-net-refund", section: 2, section_title: "Tools + Skills", title: "Cancel and calculate the net refund",
-    goal: "The same request from Try it, now with the tool contracts in view. Order #1241 costs $100 and already has a 10% shipping credit. The safe trajectory checks status, policy, and refund history, cancels first, then refunds the remaining 80%.",
+    goal: "A cancellation request with the tool contracts in view. Order #1241 costs $100 and already has a 10% shipping credit. The safe trajectory checks status, policy, and refund history, cancels first, then refunds the remaining 80%.",
     customer_id: "cust_001", prompts: [{ text: "Cancel my order for the water bottle set please. The delivery is taking too long." }],
   },
   {
@@ -80,7 +75,7 @@ export const SCENARIOS: DemoScenario[] = [
     id: "control-budget-pressure", section: 4, section_title: "Control", title: "Budget pressure / graceful pause",
     goal: "Lower the visible tool-call budget. A generic dispatch hook applies to every request: first-cut reaches the hard boundary; engineered pauses at the 90% guard. The prompt itself receives no special handling.",
     customer_id: "cust_001", prompts: [
-      { text: "My headphones still haven't arrived and I'm flying tomorrow. This keeps happening—can you work out what's going on and what you can do for me?" },
+      { text: "My headphones still haven't arrived and I'm flying tomorrow. This keeps happening, can you work out what's going on and what you can do for me?" },
     ],
   },
   {

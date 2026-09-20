@@ -48,7 +48,7 @@ export function TurnCard({ turn, isLatest }: Props) {
           {turn.restored && (
             <span
               className="ml-2 align-middle text-[10px] uppercase tracking-wider text-muted-foreground"
-              title="Rebuilt from the agent's session memory after a page refresh. Detail the message log doesn't keep — the framed message — is not shown."
+              title="Rebuilt from the agent's session memory after a page refresh. Detail the message log doesn't keep, such as the framed message, is not shown."
             >
               · from memory
             </span>

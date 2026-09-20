@@ -1,10 +1,10 @@
 ---
 id: address_change
-title: Address change
+title: Changing the shipping address on an order
 keywords: [address, shipping address, wrong address, change address, redirect, my office]
 ---
 
-# Address change
+# Changing the shipping address on an order
 
 Shipping addresses may be updated **only** on orders that have not yet shipped
 (status: `placed` or `preparing`). After shipment, the carrier owns the package

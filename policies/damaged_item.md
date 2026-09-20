@@ -1,10 +1,10 @@
 ---
-id: damaged_item
-title: Damaged on arrival
+id: refund_damaged_item
+title: Refunds and replacements for items that arrive damaged
 keywords: [damaged, broken, cracked, smashed, dented, leaking, defective, arrived broken]
 ---
 
-# Damaged on arrival
+# Refunds and replacements for items that arrive damaged
 
 Damaged items require **photo evidence** before a refund or replacement can be
 issued. The customer doesn't need to ship the item back — they can keep it.

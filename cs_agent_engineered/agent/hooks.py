@@ -37,7 +37,7 @@ from strands.hooks import HookRegistry
 from strands.hooks.events import BeforeToolCallEvent
 
 # Tools whose input dicts get `customer_id` injected. Anything NOT in this set
-# is left alone — e.g., `search_policy_kb` (no customer scoping) or the
+# is left alone — e.g., `list_policies` / `get_policy` (no customer scoping) or the
 # AgentSkills `skills` loader. Keep the list explicit so it's clear which
 # tools depend on user identity binding.
 CUSTOMER_SCOPED_TOOLS = frozenset(

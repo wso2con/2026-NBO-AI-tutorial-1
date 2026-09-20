@@ -105,7 +105,7 @@ export function AgentPanel({
             {service.label}
           </div>
           <div className="font-mono text-[11px] text-muted-foreground">
-            {service.caption} · :{new URL(service.baseUrl).port}
+            {service.caption}
           </div>
         </div>
         <div className="ml-auto flex shrink-0 items-center gap-1.5">
@@ -169,14 +169,31 @@ export function AgentPanel({
       </div>
       <Separator />
 
-      {service.variant === "engineered" && (
-        <div className="flex flex-wrap items-center gap-1 border-b bg-engineered/5 px-4 py-2 text-[10px] uppercase tracking-wide text-muted-foreground">
-          <span className="mr-1 font-semibold text-engineered">harness</span>
-          <Badge variant="outline">explicit run state</Badge>
-          <Badge variant="outline">progress control</Badge>
-          <Badge variant="outline">safe recovery</Badge>
-        </div>
-      )}
+      {/* Capability banner. Both panels carry one so the two columns stay
+          row-aligned; the badges say what each loop does and does not own. */}
+      <div
+        className={cn(
+          "flex flex-wrap items-center gap-1 border-b px-4 py-2 text-[10px] uppercase tracking-wide text-muted-foreground",
+          service.variant === "engineered" ? "bg-engineered/5" : "bg-first-cut/5",
+        )}
+      >
+        <span
+          className={cn(
+            "mr-1 font-semibold",
+            service.variant === "engineered" ? "text-engineered" : "text-first-cut",
+          )}
+        >
+          {service.variant === "engineered" ? "harness" : "bare loop"}
+        </span>
+        {(service.variant === "engineered"
+          ? ["explicit run state", "progress control", "safe recovery"]
+          : ["implicit run state", "no progress control", "no recovery"]
+        ).map((capability) => (
+          <Badge key={capability} variant="outline">
+            {capability}
+          </Badge>
+        ))}
+      </div>
 
       {/* Tools catalog drawer — collapsed by default */}
       <SystemPromptDrawer

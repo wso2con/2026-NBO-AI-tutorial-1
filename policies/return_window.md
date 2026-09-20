@@ -1,10 +1,10 @@
 ---
 id: return_window
-title: Return window
+title: Returning an unwanted item within the return window
 keywords: [return, return window, send back, 30 days, unwanted, changed mind]
 ---
 
-# Return window
+# Returning an unwanted item within the return window
 
 Customers may return undamaged items within **30 days of delivery** for a full
 refund. Items damaged in transit are covered separately under the

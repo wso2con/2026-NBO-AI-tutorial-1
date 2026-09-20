@@ -14,7 +14,7 @@ Cancellation flips an order's status to `cancelled` AND usually owes the custome
 1. **Look up the order** — `get_order(order_id)`. Note `total_usd` and `status`. On `ownership_mismatch` (code 403), do NOT retry; the order isn't theirs.
 2. **Check status.** If the order has already shipped (any status beyond `placed` / `preparing`), cancellation is not allowed. Consult `address_change` policy for the carrier-redirect path; for delivered orders consult `return_window` policy and treat as a return, not a cancel. Stop here.
 3. **Check refund history** — `get_refund_history(customer_id)`. Filter entries by THIS `order_id` and SUM their `refund_percentage` values — that's `already_refunded_pct` (a fraction). No dollar-math: the ledger records the fraction each refund used.
-4. **Look up the refund-calculation policy** — `search_policy_kb("cancellation refund percentage")` or similar. Read the current cancellation percentage; do not copy a value from this procedure.
+4. **Look up the refund-calculation policy** — `list_policies`, then `get_policy("refund_calculation")`. Read the current cancellation percentage; do not copy a value from this procedure.
 5. **Compute net refund percentage:**
 
        net_pct = cancellation_pct − already_refunded_pct

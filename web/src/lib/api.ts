@@ -38,13 +38,13 @@ export const AGENTS: Record<AgentVariant, AgentService> = {
     variant: "first_cut",
     baseUrl: "http://localhost:8001",
     label: "FIRST-CUT LOOP",
-    caption: "cs-agent-first-cut · broad, implicit control",
+    caption: "cs-agent-first-cut",
   },
   engineered: {
     variant: "engineered",
     baseUrl: "http://localhost:8002",
     label: "ENGINEERED LOOP",
-    caption: "cs-agent-engineered · explicit harness",
+    caption: "cs-agent-engineered",
   },
 };
 

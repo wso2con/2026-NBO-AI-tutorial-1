@@ -18,7 +18,7 @@ Every escalation is a handoff to a human with zero context. The `reason` field i
 
 ## Priority selection
 
-**Policies dictate the priority for cases they cover.** Look them up via `search_policy_kb` and use what they say — e.g. `refund_authority` requires `normal` or higher for over-cap; `damaged_item` requires `high` for safety / repeat issues. When no policy specifies:
+**Policies dictate the priority for cases they cover.** Look them up via `list_policies` then `get_policy`, and use what they say — e.g. `refund_authority` requires `normal` or higher for over-cap; `damaged_item` requires `high` for safety / repeat issues. When no policy specifies:
 
 - `low` — purely informational, no action expected. Rare.
 - `normal` — needs human action but no time pressure.
@@ -27,7 +27,7 @@ Every escalation is a handoff to a human with zero context. The `reason` field i
 
 ## High-level flow
 
-1. **Investigate first** — `lookup_customer`, `get_order`, `get_refund_history`, `get_open_tickets`, `search_policy_kb`. The reason field needs facts, not impressions.
+1. **Investigate first** — `lookup_customer`, `get_order`, `get_refund_history`, `get_open_tickets`, `list_policies` / `get_policy`. The reason field needs facts, not impressions.
 2. **Check the relevant policy** for any required priority.
 3. **Compose the reason** with all six required fields above.
 4. **Call `escalate_to_human(reason, priority)`** — `customer_id` is bound.

@@ -127,8 +127,10 @@ def _summarize_args(name: str, args: dict | None) -> str:
         return args.get("order_id", "?")
     if name in {"get_customer_orders", "get_open_tickets", "get_refund_history"}:
         return args.get("customer_id", "?")
-    if name == "search_policy_kb":
-        return f'"{_truncate(args.get("query", ""), 40)}"'
+    if name == "get_policy":
+        return args.get("policy_id", "?")
+    if name == "list_policies":
+        return ""
     if name == "issue_refund":
         pct = args.get("refund_percentage")
         pct_str = f"{pct:.0%}" if isinstance(pct, (int, float)) else "?"
