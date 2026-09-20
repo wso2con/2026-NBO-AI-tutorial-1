@@ -409,7 +409,13 @@ def tools_catalog(
         else PROFILE.memory.episodic.enabled
     )
     agent = _get_catalog_agent(effective_skills, effective_episodic)
-    return {"tools": agent.tool_registry.get_all_tool_specs()}
+    return {
+        "tools": agent.tool_registry.get_all_tool_specs(),
+        # The rendered system prompt for this toggle combo (agent-profile.yaml
+        # with identity and caps substituted in). Served from the catalog so
+        # the UI can show it without waiting for a run to stream it back.
+        "system_prompt": agent.system_prompt or "",
+    }
 
 
 @app.get("/api/memory")
@@ -815,6 +821,22 @@ async def run(req: RunRequest):
             yield {"event": "error", "data": json.dumps({"message": str(exc)})}
 
     return EventSourceResponse(generator())
+
+
+@app.get("/api/session")
+def session(customer_id: str) -> dict[str, Any]:
+    """The conversation this customer's agent currently remembers.
+
+    Engineered keeps one agent per customer, so the session is scoped by
+    `customer_id`. An agent that was never built for this customer has no
+    memory yet — report an empty thread rather than building one.
+    """
+    from session_view import turns_from_messages
+
+    agent = _AGENTS.get(customer_id)
+    if agent is None:
+        return {"turns": []}
+    return {"turns": turns_from_messages(getattr(agent, "messages", []))}
 
 
 @app.post("/api/reset")

@@ -5,6 +5,7 @@ import { cn } from "@/lib/utils";
 import type { AgentService, AgentTool } from "@/lib/api";
 import type { AgentState } from "@/lib/types";
 import { MemoryDrawer } from "./MemoryDrawer";
+import { SystemPromptDrawer } from "./SystemPromptDrawer";
 import { ToolsDrawer } from "./ToolsDrawer";
 import { TurnCard } from "./TurnCard";
 
@@ -12,6 +13,8 @@ interface Props {
   service: AgentService;
   state: AgentState;
   tools: AgentTool[];
+  /** Rendered system prompt from /api/tools. */
+  systemPrompt: string;
   toolsLoading: boolean;
   toolsError: string | null;
   onToggleEnabled: () => void;
@@ -38,6 +41,7 @@ export function AgentPanel({
   service,
   state,
   tools,
+  systemPrompt,
   toolsLoading,
   toolsError,
   onToggleEnabled,
@@ -175,6 +179,12 @@ export function AgentPanel({
       )}
 
       {/* Tools catalog drawer — collapsed by default */}
+      <SystemPromptDrawer
+        content={systemPrompt}
+        loading={toolsLoading}
+        error={toolsError ?? undefined}
+      />
+
       <ToolsDrawer
         tools={tools}
         loading={toolsLoading}

@@ -200,14 +200,22 @@ export interface AgentTool {
   };
 }
 
-/** GET /api/tools — list of tools this agent has registered.
+/** GET /api/tools — the tools this agent has registered, plus its system
+ *  prompt. Both are properties of the agent, not of any one turn, so they
+ *  are read here rather than picked out of a run's event stream.
  *  engineered honors `skills_enabled` / `episodic_enabled` query params so the
  *  drawer matches the live tool set for the current toggle state. first-cut
  *  ignores them. UI refetches whenever the toggles flip. */
+export interface AgentCatalog {
+  tools: AgentTool[];
+  /** The agent's rendered system prompt for the current toggle combo. */
+  systemPrompt: string;
+}
+
 export async function fetchTools(
   svc: AgentService,
   flags?: { skills_enabled?: boolean; episodic_enabled?: boolean },
-): Promise<AgentTool[]> {
+): Promise<AgentCatalog> {
   const params = new URLSearchParams();
   if (flags?.skills_enabled !== undefined) {
     params.set("skills_enabled", String(flags.skills_enabled));
@@ -220,8 +228,46 @@ export async function fetchTools(
   if (!response.ok) {
     throw new Error(`${svc.variant} /api/tools returned ${response.status}`);
   }
-  const body = (await response.json()) as { tools?: AgentTool[] };
-  return body.tools ?? [];
+  const body = (await response.json()) as {
+    tools?: AgentTool[];
+    system_prompt?: string;
+  };
+  return { tools: body.tools ?? [], systemPrompt: body.system_prompt ?? "" };
+}
+
+/** One turn as the agent remembers it, rebuilt from `agent.messages`. */
+export interface RestoredTurn {
+  user_prompt: string;
+  final_reply: string;
+  trace: Array<{
+    tool_use_id: string;
+    name: string;
+    args: unknown;
+    args_summary: string;
+    result?: unknown;
+    result_summary?: string;
+    is_error?: boolean;
+  }>;
+}
+
+/** GET /api/session — the conversation currently in the agent's memory.
+ *  Lets the console rebuild the thread after a browser refresh instead of
+ *  showing an empty panel beside an agent that still remembers everything.
+ *  engineered scopes the session by customer; first-cut has one shared agent. */
+export async function fetchSession(
+  svc: AgentService,
+  customerId: string,
+): Promise<RestoredTurn[]> {
+  const qs =
+    svc.variant === "engineered"
+      ? `?customer_id=${encodeURIComponent(customerId)}`
+      : "";
+  const response = await fetch(`${svc.baseUrl}/api/session${qs}`);
+  if (!response.ok) {
+    throw new Error(`${svc.variant} /api/session returned ${response.status}`);
+  }
+  const body = (await response.json()) as { turns?: RestoredTurn[] };
+  return body.turns ?? [];
 }
 
 export interface EvaluationSuite {

@@ -8,7 +8,6 @@ import {
 import { cn } from "@/lib/utils";
 import type { Turn } from "@/lib/types";
 import { TraceRow } from "./TraceRow";
-import { LoopTrajectory } from "./LoopTrajectory";
 import { Markdown } from "./Markdown";
 import { TextViewer } from "./TextViewer";
 
@@ -18,9 +17,8 @@ interface Props {
 }
 
 /**
- * One turn in the conversation thread: user prompt, optional drawers for
- * the framed message + system prompt the agent received, ordered trace
- * rows, and the agent's reply at the bottom.
+ * One turn in the conversation thread: user prompt, the framed message the
+ * agent received, ordered trace rows, and the agent's reply at the bottom.
  */
 export function TurnCard({ turn, isLatest }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -47,6 +45,14 @@ export function TurnCard({ turn, isLatest }: Props) {
         </div>
         <div className="min-w-0 flex-1 whitespace-pre-wrap rounded-md bg-muted px-3 py-2 text-sm leading-relaxed">
           {turn.user_prompt}
+          {turn.restored && (
+            <span
+              className="ml-2 align-middle text-[10px] uppercase tracking-wider text-muted-foreground"
+              title="Rebuilt from the agent's session memory after a page refresh. Detail the message log doesn't keep — the framed message — is not shown."
+            >
+              · from memory
+            </span>
+          )}
         </div>
       </div>
 
@@ -63,13 +69,12 @@ export function TurnCard({ turn, isLatest }: Props) {
         </div>
       )}
 
-      {turn.loop_events.length > 0 && (
-        <LoopTrajectory events={turn.loop_events} />
-      )}
-
-      {/* Drawers: framed message + system prompt */}
-      <div className="flex flex-col gap-1 pl-9 text-xs">
-        {turn.framed_message && (
+      {/* The message the agent actually received. Per-turn by nature — the
+          framing, and on the first turn of a session the episodic-memory
+          block, are prepended to what the user typed. The system prompt is
+          not per-turn, so it lives in the panel drawer instead. */}
+      {turn.framed_message && (
+        <div className="flex flex-col gap-1 pl-9 text-xs">
           <Drawer
             label="message to agent"
             suffix={framedDiffers ? "(framed)" : undefined}
@@ -77,16 +82,8 @@ export function TurnCard({ turn, isLatest }: Props) {
             content={turn.framed_message}
             maxHeight="max-h-48"
           />
-        )}
-        {turn.system_prompt && (
-          <Drawer
-            label="system prompt"
-            charCount={turn.system_prompt.length}
-            content={turn.system_prompt}
-            maxHeight="max-h-80"
-          />
-        )}
-      </div>
+        </div>
+      )}
 
       {/* Trace rows */}
       {turn.trace.length > 0 && (

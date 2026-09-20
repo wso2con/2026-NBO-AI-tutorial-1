@@ -123,6 +123,10 @@ export interface Turn {
   // When the user clicks "Next session" after this turn, this flag is set
   // and the panel renders a "─── new session ───" divider beneath it.
   session_ended_after?: boolean;
+  // Rebuilt from the agent's message log after a page refresh, rather than
+  // streamed live. The card marks these so the missing trace detail on an
+  // older turn doesn't read as the agent having skipped the work.
+  restored?: boolean;
 }
 
 export function newTurn(user_prompt: string): Turn {
@@ -140,6 +144,23 @@ export function newTurn(user_prompt: string): Turn {
     final_reply: "",
     status: "running",
     error: null,
+  };
+}
+
+/** Build a completed Turn from what the agent remembers, for thread restore.
+ *  Restored turns have no system prompt or loop events — those were never in
+ *  the message log — but the tool trace is recovered where it survived. */
+export function restoredTurn(data: {
+  user_prompt: string;
+  final_reply: string;
+  trace: TraceRow[];
+}): Turn {
+  return {
+    ...newTurn(data.user_prompt),
+    trace: data.trace,
+    final_reply: data.final_reply,
+    status: "done",
+    restored: true,
   };
 }
 

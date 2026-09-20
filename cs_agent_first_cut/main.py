@@ -375,7 +375,10 @@ def tools_catalog() -> dict[str, Any]:
     Tools don't change between requests, so the UI fetches this once per
     panel and renders a drawer next to the conversation."""
     agent = _get_first_cut_agent()
-    return {"tools": agent.tool_registry.get_all_tool_specs()}
+    return {
+        "tools": agent.tool_registry.get_all_tool_specs(),
+        "system_prompt": agent.system_prompt or "",
+    }
 
 
 @app.post("/api/run")
@@ -526,6 +529,22 @@ async def run(req: RunRequest):
             yield {"event": "error", "data": json.dumps({"message": str(exc)})}
 
     return EventSourceResponse(generator())
+
+
+@app.get("/api/session")
+def session() -> dict[str, Any]:
+    """The conversation the agent currently remembers.
+
+    `agent.messages` is the session memory. The console keeps its own copy of
+    the thread in React state, which a browser refresh throws away — this lets
+    it rebuild the thread from what the agent actually holds instead of
+    showing an empty panel beside a non-empty agent.
+    """
+    from session_view import turns_from_messages
+
+    if _FIRST_CUT_AGENT is None:
+        return {"turns": []}
+    return {"turns": turns_from_messages(getattr(_FIRST_CUT_AGENT, "messages", []))}
 
 
 @app.post("/api/reset")

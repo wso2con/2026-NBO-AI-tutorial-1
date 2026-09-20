@@ -5,6 +5,7 @@ import {
   DEFAULT_MODEL,
   SUPPORTED_MODELS,
   endSession,
+  fetchSession,
   fetchTools,
   runAgent,
   resetAgent,
@@ -17,6 +18,7 @@ import {
 import {
   emptyAgentState,
   newTurn,
+  restoredTurn,
   type AgentEvent,
   type AgentState,
   type AgentVariant,
@@ -90,19 +92,56 @@ export default function App() {
   );
   const [firstCutToolsLoading, setFirstCutToolsLoading] = useState(true);
   const [engineeredToolsLoading, setEngineeredToolsLoading] = useState(true);
+  // System prompts come from /api/tools alongside the tool list — both are
+  // agent properties, not per-turn run output.
+  const [firstCutSystemPrompt, setFirstCutSystemPrompt] = useState("");
+  const [engineeredSystemPrompt, setEngineeredSystemPrompt] = useState("");
   const [firstCutToolsError, setFirstCutToolsError] = useState<string | null>(null);
   const [engineeredToolsError, setEngineeredToolsError] = useState<string | null>(null);
   const [resetMsg, setResetMsg] = useState<string | null>(null);
   const [evaluation, setEvaluation] = useState<EvaluationSuite | null>(null);
   const abortRef = useRef<AbortController | null>(null);
 
+  // Rehydrate each panel's thread from the agent's own session memory.
+  // The console's copy of the conversation lives in React state, so a browser
+  // refresh drops it while the agent still holds everything; this reads the
+  // thread back from `agent.messages`. Runs at mount and whenever the
+  // customer changes (engineered keeps one agent per customer), and never
+  // while a turn is streaming, so it can't clobber live state.
+  useEffect(() => {
+    let cancelled = false;
+    const restore = async (
+      variant: AgentVariant,
+      setter: typeof setFirstCut,
+    ) => {
+      try {
+        const turns = await fetchSession(AGENTS[variant], customerId);
+        if (cancelled) return;
+        setter((prev) =>
+          prev.turns.some((t) => t.status === "running")
+            ? prev
+            : { ...prev, turns: turns.map(restoredTurn) },
+        );
+      } catch {
+        // A service that is down or predates /api/session simply leaves the
+        // panel as it is — an empty thread is the correct fallback.
+      }
+    };
+    void restore("first_cut", setFirstCut);
+    void restore("engineered", setEngineered);
+    return () => {
+      cancelled = true;
+    };
+  }, [customerId]);
+
   // first-cut tools are static — fetch once at mount.
   useEffect(() => {
     let cancelled = false;
     fetchTools(AGENTS.first_cut)
-      .then((tools) => {
+      .then((catalog) => {
         if (cancelled) return;
-        setFirstCutTools(tools);
+        setFirstCutTools(catalog.tools);
+        setFirstCutSystemPrompt(catalog.systemPrompt);
         setFirstCutToolsError(null);
       })
       .catch((err) => {
@@ -127,9 +166,10 @@ export default function App() {
       skills_enabled: engineeredSkillsEnabled,
       episodic_enabled: engineeredEpisodicEnabled,
     })
-      .then((tools) => {
+      .then((catalog) => {
         if (cancelled) return;
-        setEngineeredTools(tools);
+        setEngineeredTools(catalog.tools);
+        setEngineeredSystemPrompt(catalog.systemPrompt);
         setEngineeredToolsError(null);
       })
       .catch((err) => {
@@ -565,6 +605,7 @@ export default function App() {
               service={AGENTS.first_cut}
               state={firstCut}
               tools={firstCutTools}
+              systemPrompt={firstCutSystemPrompt}
               toolsLoading={firstCutToolsLoading}
               toolsError={firstCutToolsError}
               onToggleEnabled={() => toggleEnabled("first_cut")}
@@ -582,6 +623,7 @@ export default function App() {
               service={AGENTS.engineered}
               state={engineered}
               tools={engineeredTools}
+              systemPrompt={engineeredSystemPrompt}
               toolsLoading={engineeredToolsLoading}
               toolsError={engineeredToolsError}
               onToggleEnabled={() => toggleEnabled("engineered")}
