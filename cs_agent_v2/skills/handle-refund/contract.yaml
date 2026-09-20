@@ -1,0 +1,15 @@
+goal: Resolve a refund or credit request using current policy and verified ledger history.
+required_criteria:
+  - procedure_loaded
+  - order_observed
+  - policy_observed
+  - refund_history_observed
+  - refund_committed
+  - response_produced
+ordering:
+  - before: search_policy_kb
+    after: issue_refund
+    violation: refund_was_attempted_before_policy_evidence
+  - before: get_refund_history
+    after: issue_refund
+    violation: refund_was_attempted_before_refund_history

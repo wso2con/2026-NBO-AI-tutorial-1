@@ -1,0 +1,28 @@
+[project]
+name = "cs-agent-v1"
+version = "0.1.0"
+description = "First-cut customer-support agent — in-process bad tools, no scoped identity, no skills, no MCP. Half of the side-by-side comparison."
+requires-python = ">=3.11"
+dependencies = [
+    "strands-agents>=1.40.0",
+    "openai>=2.37.0",
+    "pydantic>=2.0",
+    "python-dotenv>=1.0.0",
+
+    # HTTP shell — same FastAPI / SSE wire as cs_agent_v2 so the React
+    # frontend can treat both services identically.
+    "fastapi>=0.136.1",
+    "uvicorn[standard]>=0.27.0",
+    "sse-starlette>=2.0.0",
+]
+
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+# `pip install .` should install the deps above but NOT try to package
+# this agent's own Python files — there's nothing here to ship as a
+# library. Setting py-modules to an empty list silences setuptools'
+# auto-discovery.
+[tool.setuptools]
+py-modules = []

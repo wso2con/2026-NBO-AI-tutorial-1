@@ -1,0 +1,115 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    /* shadcn Slate, lightly tuned. Solid surfaces; no opacity sprawl. */
+    --background: 210 20% 98%;
+    --foreground: 222.2 47% 11%;
+    --card: 0 0% 100%;
+    --card-foreground: 222.2 47% 11%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 222.2 47% 11%;
+    --primary: 222.2 47% 11%;
+    --primary-foreground: 210 40% 98%;
+    --secondary: 214 32% 94%;
+    --secondary-foreground: 222.2 47% 11%;
+    --muted: 214 32% 94%;
+    --muted-foreground: 215 16% 40%;
+    --accent: 214 32% 91%;
+    --accent-foreground: 222.2 47% 11%;
+    --destructive: 0 72% 51%;
+    --destructive-foreground: 210 40% 98%;
+    --success: 142 71% 36%;
+    --success-foreground: 0 0% 100%;
+    --border: 214 28% 89%;
+    --input: 214 28% 89%;
+    --ring: 222.2 47% 11%;
+    --radius: 0.75rem;
+
+    /* Agent identity. Amber = v1 ("first cut, watch out"); emerald = v2
+       ("hardened"). Used as a 2-px top stripe + status dot on each panel
+       so the audience can tell the columns apart without reading labels. */
+    --v1: 25 92% 53%;
+    --v1-foreground: 0 0% 100%;
+    --v2: 158 64% 42%;
+    --v2-foreground: 0 0% 100%;
+  }
+
+  .dark {
+    --background: 224 71% 4%;
+    --foreground: 210 20% 96%;
+    --card: 224 47% 8%;
+    --card-foreground: 210 20% 96%;
+    --popover: 224 47% 8%;
+    --popover-foreground: 210 20% 96%;
+    --primary: 210 20% 96%;
+    --primary-foreground: 224 71% 4%;
+    --secondary: 215 28% 20%;
+    --secondary-foreground: 210 20% 96%;
+    --muted: 215 28% 18%;
+    --muted-foreground: 217 14% 70%;
+    --accent: 215 28% 22%;
+    --accent-foreground: 210 20% 96%;
+    --destructive: 0 65% 55%;
+    --destructive-foreground: 210 20% 96%;
+    --success: 142 60% 50%;
+    --success-foreground: 224 71% 4%;
+    --border: 215 28% 20%;
+    --input: 215 28% 20%;
+    --ring: 217 14% 70%;
+
+    --v1: 30 95% 60%;
+    --v1-foreground: 224 71% 4%;
+    --v2: 158 60% 52%;
+    --v2-foreground: 224 71% 4%;
+  }
+
+  * {
+    @apply border-border;
+  }
+  html, body, #root {
+    height: 100%;
+  }
+  body {
+    @apply bg-background text-foreground antialiased;
+    font-feature-settings: "rlig" 1, "calt" 1;
+    font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  }
+}
+
+@layer components {
+  /* Very subtle texture behind the app — two faint blooms at the top
+     corners. Same shape in both themes; the opacity is tuned so it never
+     competes with content. */
+  .bg-aurora {
+    background:
+      radial-gradient(ellipse 60% 40% at 18% -10%, hsl(var(--primary) / 0.04), transparent 60%),
+      radial-gradient(ellipse 60% 40% at 82% -10%, hsl(var(--primary) / 0.04), transparent 60%),
+      hsl(var(--background));
+  }
+  .dark .bg-aurora {
+    background:
+      radial-gradient(ellipse 60% 40% at 18% -10%, hsl(var(--primary) / 0.06), transparent 60%),
+      radial-gradient(ellipse 60% 40% at 82% -10%, hsl(var(--primary) / 0.06), transparent 60%),
+      hsl(var(--background));
+  }
+
+  /* Glow on the agent status dot while a turn is in flight. */
+  .running-glow {
+    box-shadow: 0 0 0 4px hsl(var(--ring) / 0.10), 0 0 12px 2px currentColor;
+  }
+
+  /* Custom thin scrollbar to feel less busy. */
+  .scroll-thin::-webkit-scrollbar { width: 8px; height: 8px; }
+  .scroll-thin::-webkit-scrollbar-thumb {
+    background: hsl(var(--muted-foreground) / 0.25);
+    border-radius: 9999px;
+  }
+  .scroll-thin::-webkit-scrollbar-thumb:hover {
+    background: hsl(var(--muted-foreground) / 0.45);
+  }
+}
+
+.whitespace-pre-wrap { white-space: pre-wrap; }

@@ -1,0 +1,32 @@
+{
+  "cust_001": {
+    "customer_id": "cust_001",
+    "name": "Alice Chen",
+    "email": "alice.chen@example.com",
+    "phone": "+49 30 5551 0142",
+    "tier": "standard",
+    "verified": true,
+    "joined": "2023-08-12",
+    "lifetime_orders": 27
+  },
+  "cust_002": {
+    "customer_id": "cust_002",
+    "name": "Bob Martinez",
+    "email": "bob.martinez@example.com",
+    "phone": "+49 89 5551 0204",
+    "tier": "standard",
+    "verified": true,
+    "joined": "2022-03-04",
+    "lifetime_orders": 43
+  },
+  "cust_003": {
+    "customer_id": "cust_003",
+    "name": "Carol Nguyen",
+    "email": "carol.nguyen@acme-gmbh.de",
+    "phone": "+49 40 5551 0388",
+    "tier": "business",
+    "verified": true,
+    "joined": "2021-11-19",
+    "lifetime_orders": 312
+  }
+}

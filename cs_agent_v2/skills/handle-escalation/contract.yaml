@@ -1,0 +1,5 @@
+goal: Escalate a verified case with enough evidence for a human to continue safely.
+required_criteria:
+  - procedure_loaded
+  - ticket_opened
+  - response_produced

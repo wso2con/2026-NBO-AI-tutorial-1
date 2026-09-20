@@ -1,0 +1,5 @@
+goal: Update only eligible shipping destinations with the customer's explicit approval.
+required_criteria:
+  - procedure_loaded
+  - related_orders_observed
+  - response_produced

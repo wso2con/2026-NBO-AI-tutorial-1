@@ -1,0 +1,265 @@
+import { BookOpen, Brain, ListChecks, Loader2, MessageSquare, Power } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
+import { Separator } from "@/components/ui/separator";
+import { cn } from "@/lib/utils";
+import type { AgentService, AgentTool } from "@/lib/api";
+import type { AgentState } from "@/lib/types";
+import { MemoryDrawer } from "./MemoryDrawer";
+import { ToolsDrawer } from "./ToolsDrawer";
+import { TurnCard } from "./TurnCard";
+
+interface Props {
+  service: AgentService;
+  state: AgentState;
+  tools: AgentTool[];
+  toolsLoading: boolean;
+  toolsError: string | null;
+  onToggleEnabled: () => void;
+  // v2-only: feature toggles. Undefined for v1 — the row doesn't render.
+  skillsEnabled?: boolean;
+  episodicEnabled?: boolean;
+  // `plannerEnabled` is per-request (no agent rebuild), so it can flip
+  // freely without the confirm-dialog dance the other two need.
+  plannerEnabled?: boolean;
+  onToggleSkills?: () => void;
+  onToggleEpisodic?: () => void;
+  onTogglePlanner?: () => void;
+  // Disables the feature toggles while a chat is in-flight (same as the
+  // top-bar reset button).
+  featuresDisabled?: boolean;
+  // v2-only: identifies whose memory file to read, and a bump counter the
+  // parent increments after events that may have modified the file. Both
+  // are required when `episodicEnabled` is true; otherwise unused.
+  customerId?: string;
+  memoryRefreshKey?: number;
+}
+
+export function AgentPanel({
+  service,
+  state,
+  tools,
+  toolsLoading,
+  toolsError,
+  onToggleEnabled,
+  skillsEnabled,
+  episodicEnabled,
+  plannerEnabled,
+  onToggleSkills,
+  onToggleEpisodic,
+  onTogglePlanner,
+  featuresDisabled,
+  customerId,
+  memoryRefreshKey,
+}: Props) {
+  const lastTurn = state.turns[state.turns.length - 1];
+  const status = lastTurn?.status ?? "idle";
+  const lastDecision = [...(lastTurn?.loop_events ?? [])]
+    .reverse()
+    .find((event) => event.type === "loop_decision")?.decision;
+  const displayStatus =
+    status === "done" && typeof lastDecision === "string"
+      ? lastDecision.toLowerCase()
+      : status;
+  const isRunning = status === "running";
+  const isError = status === "error";
+  const isComplete = displayStatus === "complete";
+
+  // v1 = amber accent, v2 = emerald. Used for the top stripe and the
+  // status dot when the panel is idle / running so the columns are visually
+  // distinct at a glance — even before the audience reads the labels.
+  const accentClass = service.variant === "v1" ? "bg-v1" : "bg-v2";
+  const dotColor = isError ? "bg-destructive" : accentClass;
+
+  const statusVariant: "secondary" | "destructive" | "success" = isError
+    ? "destructive"
+    : isComplete
+      ? "success"
+      : "secondary";
+
+  return (
+    <section
+      className={cn(
+        "relative flex h-full min-h-0 flex-col overflow-hidden rounded-xl border bg-card shadow-sm transition-opacity",
+        !state.enabled && "opacity-50",
+      )}
+    >
+      {/* v1/v2 accent stripe */}
+      <div className={cn("h-[3px] w-full shrink-0", accentClass)} aria-hidden />
+
+      {/* Header */}
+      <div className="flex shrink-0 flex-wrap items-center gap-3 px-4 py-3">
+        <span
+          className={cn(
+            "h-2.5 w-2.5 shrink-0 rounded-full text-current transition-shadow",
+            dotColor,
+            isRunning && "running-glow",
+          )}
+          aria-label={`${service.variant} status: ${displayStatus}`}
+        />
+        <div className="flex min-w-[150px] flex-1 flex-col">
+          <div className="truncate text-sm font-semibold leading-tight tracking-tight">
+            {service.label}
+          </div>
+          <div className="font-mono text-[11px] text-muted-foreground">
+            {service.caption} · :{new URL(service.baseUrl).port}
+          </div>
+        </div>
+        <div className="ml-auto flex shrink-0 items-center gap-1.5">
+          {isRunning && (
+            <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />
+          )}
+          {state.turns.length > 0 && (
+            <Badge variant={statusVariant} className="capitalize">
+              {displayStatus}
+            </Badge>
+          )}
+          {/* v2-only feature toggles. Flipping either restarts the v2 session
+              (agent rebuild — skills/episodic memory are baked at build time).
+              App.tsx confirms the destruction before calling the handler. */}
+          {onToggleSkills && (
+            <FeatureToggle
+              label="skills"
+              icon={<BookOpen className="h-3 w-3" />}
+              enabled={!!skillsEnabled}
+              onClick={onToggleSkills}
+              disabled={featuresDisabled}
+            />
+          )}
+          {onToggleEpisodic && (
+            <FeatureToggle
+              label="memory"
+              icon={<Brain className="h-3 w-3" />}
+              enabled={!!episodicEnabled}
+              onClick={onToggleEpisodic}
+              disabled={featuresDisabled}
+            />
+          )}
+          {onTogglePlanner && (
+            <FeatureToggle
+              label="planner"
+              icon={<ListChecks className="h-3 w-3" />}
+              enabled={!!plannerEnabled}
+              onClick={onTogglePlanner}
+              disabled={featuresDisabled}
+            />
+          )}
+          <label
+            className={cn(
+              "inline-flex cursor-pointer select-none items-center gap-1 rounded-md border px-2 py-1 text-xs transition-colors",
+              state.enabled
+                ? "border-transparent bg-secondary text-secondary-foreground hover:bg-secondary/80"
+                : "border-input bg-background text-muted-foreground hover:bg-accent",
+            )}
+            title={state.enabled ? "Click to disable this agent" : "Click to enable"}
+          >
+            <input
+              type="checkbox"
+              checked={state.enabled}
+              onChange={onToggleEnabled}
+              className="sr-only"
+            />
+            <Power className="h-3 w-3" />
+            <span className="font-medium">{state.enabled ? "on" : "off"}</span>
+          </label>
+        </div>
+      </div>
+      <Separator />
+
+      {service.variant === "v2" && (
+        <div className="flex flex-wrap items-center gap-1 border-b bg-v2/5 px-4 py-2 text-[10px] uppercase tracking-wide text-muted-foreground">
+          <span className="mr-1 font-semibold text-v2">harness</span>
+          <Badge variant="outline">explicit run state</Badge>
+          <Badge variant="outline">progress control</Badge>
+          <Badge variant="outline">safe recovery</Badge>
+        </div>
+      )}
+
+      {/* Tools catalog drawer — collapsed by default */}
+      <ToolsDrawer
+        tools={tools}
+        loading={toolsLoading}
+        error={toolsError ?? undefined}
+      />
+
+      {/* Episodic-memory file viewer — only when the v2 feature is on.
+          Lets the audience inspect what the agent committed to disk
+          across the next-session boundary. */}
+      {episodicEnabled && customerId && (
+        <MemoryDrawer
+          service={service}
+          customerId={customerId}
+          refreshKey={memoryRefreshKey ?? 0}
+        />
+      )}
+
+      {/* Body — scrolling thread of turns */}
+      <div className="scroll-thin flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto p-4">
+        {state.turns.length === 0 ? (
+          <div className="flex flex-1 flex-col items-center justify-center gap-2 text-center text-muted-foreground">
+            <MessageSquare className="h-6 w-6 opacity-60" />
+            {state.enabled ? (
+              <div className="space-y-1">
+                <div className="text-sm">Type a prompt below</div>
+                <div className="text-xs">Both agents see the same input.</div>
+              </div>
+            ) : (
+              <div className="space-y-1">
+                <div className="text-sm">Disabled</div>
+                <div className="text-xs">Won't receive prompts.</div>
+              </div>
+            )}
+          </div>
+        ) : (
+          state.turns.map((t, i) => (
+            <div key={t.id} className="flex flex-col gap-3">
+              <TurnCard turn={t} isLatest={i === state.turns.length - 1} />
+              {t.session_ended_after && (
+                <div className="flex items-center gap-2 px-1 text-[10px] uppercase tracking-widest text-muted-foreground">
+                  <div className="h-px flex-1 bg-border" />
+                  <span>new session · time has passed</span>
+                  <div className="h-px flex-1 bg-border" />
+                </div>
+              )}
+            </div>
+          ))
+        )}
+      </div>
+    </section>
+  );
+}
+
+interface FeatureToggleProps {
+  label: string;
+  icon: React.ReactNode;
+  enabled: boolean;
+  onClick: () => void;
+  disabled?: boolean;
+}
+
+function FeatureToggle({ label, icon, enabled, onClick, disabled }: FeatureToggleProps) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      title={
+        disabled
+          ? "Wait for the current turn to finish"
+          : `Click to turn ${enabled ? "off" : "on"} (triggers a full reset)`
+      }
+      className={cn(
+        "inline-flex items-center gap-1 rounded-md border px-2 py-1 text-xs transition-colors",
+        "disabled:cursor-not-allowed disabled:opacity-50",
+        enabled
+          ? "border-transparent bg-secondary text-secondary-foreground hover:bg-secondary/80"
+          : "border-input bg-background text-muted-foreground hover:bg-accent",
+      )}
+    >
+      {icon}
+      <span className="font-medium">{label}</span>
+      <span className="ml-0.5 text-[10px] uppercase tracking-wider opacity-70">
+        {enabled ? "on" : "off"}
+      </span>
+    </button>
+  );
+}
