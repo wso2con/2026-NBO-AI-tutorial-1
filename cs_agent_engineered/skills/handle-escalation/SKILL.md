@@ -9,8 +9,8 @@ Every escalation is a handoff to a human with zero context. The `reason` field i
 
 ## What MUST be in the reason field
 
-1. **Customer summary** — name and tier from `lookup_customer` ("Bob Martinez, standard tier").
-2. **Orders touched this session** — IDs and statuses ("#2210 delivered_damaged, $58").
+1. **Customer summary** — name and tier from `lookup_customer` ("Alex Martin, standard tier").
+2. **Orders touched this session** — IDs and statuses ("#1243 delivered_damaged, $58").
 3. **Relevant prior ledger entries** — refunds (`get_refund_history`), tickets (`get_open_tickets`). Reference past tickets explicitly ("cross-ref TICKET-1001, still open from 2026-05-01").
 4. **The specific customer ask** — quote or paraphrase the triggering message.
 5. **Why escalating** — pick one and name it: refund-exceeds-cap / customer-demands-human / unmet-prior-promise / policy-ambiguous / adversarial-input / repeat-pattern / unverified-claim.

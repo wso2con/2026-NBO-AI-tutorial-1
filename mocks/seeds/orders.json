@@ -8,7 +8,7 @@
       "Wireless over-ear headphones (HD-X1, black)",
       "USB-C charging cable (2 m, braided)"
     ],
-    "total_usd": 89.50,
+    "total_usd": 89.5,
     "shipping_address": "221 Bakerstraße, 10117 Berlin",
     "carrier": "DHL",
     "tracking_id": "DHL-EXP-4521-8829-3017",
@@ -22,8 +22,10 @@
     "customer_id": "cust_001",
     "status": "delivered",
     "placed": "2026-04-22",
-    "items": ["Athletic crew socks (3-pack, size L)"],
-    "total_usd": 24.00,
+    "items": [
+      "Athletic crew socks (3-pack, size L)"
+    ],
+    "total_usd": 24.0,
     "shipping_address": "221 Bakerstraße, 10117 Berlin",
     "carrier": "DHL",
     "tracking_id": "DHL-STD-7741-2295-0014",
@@ -37,8 +39,10 @@
     "customer_id": "cust_001",
     "status": "delivered_damaged",
     "placed": "2026-04-30",
-    "items": ["Waterproof winter coat (size M, navy)"],
-    "total_usd": 250.00,
+    "items": [
+      "Waterproof winter coat (size M, navy)"
+    ],
+    "total_usd": 250.0,
     "shipping_address": "221 Bakerstraße, 10117 Berlin",
     "carrier": "DHL",
     "tracking_id": "DHL-STD-8156-3471-0922",
@@ -52,8 +56,10 @@
     "customer_id": "cust_001",
     "status": "placed",
     "placed": "2026-05-05",
-    "items": ["Bluetooth speaker (compact, navy) — backorder, restock ETA 2026-05-22"],
-    "total_usd": 49.00,
+    "items": [
+      "Bluetooth speaker (compact, navy) — backorder, restock ETA 2026-05-22"
+    ],
+    "total_usd": 49.0,
     "shipping_address": "221 Bakerstraße, 10117 Berlin",
     "delivery_days_late": 0,
     "damaged": false,
@@ -64,8 +70,10 @@
     "customer_id": "cust_001",
     "status": "preparing",
     "placed": "2026-05-06",
-    "items": ["Premium insulated water bottle set (1 L bottle + travel mug, matte black)"],
-    "total_usd": 100.00,
+    "items": [
+      "Premium insulated water bottle set (1 L bottle + travel mug, matte black)"
+    ],
+    "total_usd": 100.0,
     "shipping_address": "221 Bakerstraße, 10117 Berlin",
     "estimated_delivery": "2026-05-21",
     "delivery_days_late": 0,
@@ -77,8 +85,10 @@
     "customer_id": "cust_001",
     "status": "in_transit",
     "placed": "2026-05-17",
-    "items": ["Universal travel adapter (EU/US/UK, 65W USB-C)"],
-    "total_usd": 35.00,
+    "items": [
+      "Universal travel adapter (EU/US/UK, 65W USB-C)"
+    ],
+    "total_usd": 35.0,
     "shipping_address": "221 Bakerstraße, 10117 Berlin",
     "carrier": "DHL",
     "tracking_id": "DHL-EXP-9821-4452-0117",
@@ -87,28 +97,32 @@
     "damaged": false,
     "payment_method": "VISA-4827"
   },
-  "2210": {
-    "order_id": "2210",
-    "customer_id": "cust_002",
+  "1243": {
+    "order_id": "1243",
+    "customer_id": "cust_001",
     "status": "delivered_damaged",
-    "placed": "2026-04-30",
-    "items": ["8-cup glass French press"],
-    "total_usd": 58.00,
-    "shipping_address": "14 Lindenstraße, 80331 Munich",
-    "carrier": "Hermes",
-    "tracking_id": "HRM-PARCEL-22014-0009",
-    "estimated_delivery": "2026-05-04",
+    "placed": "2026-05-09",
+    "items": [
+      "8-cup glass French press"
+    ],
+    "total_usd": 58.0,
+    "shipping_address": "221 Bakerstraße, 10117 Berlin",
+    "carrier": "DHL",
+    "tracking_id": "DHL-STD-8156-3472-0140",
+    "estimated_delivery": "2026-05-12",
     "delivery_days_late": 0,
     "damaged": true,
-    "payment_method": "VISA-9134"
+    "payment_method": "VISA-4827"
   },
   "2245": {
     "order_id": "2245",
     "customer_id": "cust_002",
     "status": "delivered",
     "placed": "2026-03-15",
-    "items": ["Burr coffee grinder (16-setting)"],
-    "total_usd": 120.00,
+    "items": [
+      "Burr coffee grinder (16-setting)"
+    ],
+    "total_usd": 120.0,
     "shipping_address": "14 Lindenstraße, 80331 Munich",
     "carrier": "Hermes",
     "tracking_id": "HRM-PARCEL-21557-0118",
@@ -117,28 +131,32 @@
     "damaged": false,
     "payment_method": "VISA-9134"
   },
-  "5050": {
-    "order_id": "5050",
-    "customer_id": "cust_003",
+  "2246": {
+    "order_id": "2246",
+    "customer_id": "cust_002",
     "status": "delivered_damaged",
-    "placed": "2026-05-06",
-    "items": ["Mesh-back ergonomic office chairs (12 units, B2B bulk)"],
-    "total_usd": 4800.00,
-    "shipping_address": "Acme GmbH, Hauptstraße 9, 20457 Hamburg",
-    "carrier": "UPS",
-    "tracking_id": "UPS-1Z9X7384YW01234567",
-    "estimated_delivery": "2026-05-12",
+    "placed": "2026-04-30",
+    "items": [
+      "Ceramic pour-over dripper set (600 ml)"
+    ],
+    "total_usd": 46.0,
+    "shipping_address": "14 Lindenstraße, 80331 Munich",
+    "carrier": "Hermes",
+    "tracking_id": "HRM-PARCEL-22014-0009",
+    "estimated_delivery": "2026-05-04",
     "delivery_days_late": 0,
     "damaged": true,
-    "payment_method": "INVOICE-PO-ACME-2026-Q2-014"
+    "payment_method": "VISA-9134"
   },
   "5012": {
     "order_id": "5012",
     "customer_id": "cust_003",
     "status": "delivered",
     "placed": "2026-04-01",
-    "items": ["Adjustable standing desks (4 units, electric, 60×30in)"],
-    "total_usd": 2200.00,
+    "items": [
+      "Adjustable standing desks (4 units, electric, 60×30in)"
+    ],
+    "total_usd": 2200.0,
     "shipping_address": "Acme GmbH, Hauptstraße 9, 20457 Hamburg",
     "carrier": "UPS",
     "tracking_id": "UPS-1Z9X7384YW04412290",
@@ -146,5 +164,22 @@
     "delivery_days_late": 0,
     "damaged": false,
     "payment_method": "INVOICE-PO-ACME-2026-Q1-088"
+  },
+  "5050": {
+    "order_id": "5050",
+    "customer_id": "cust_003",
+    "status": "delivered_damaged",
+    "placed": "2026-05-06",
+    "items": [
+      "Mesh-back ergonomic office chairs (12 units, B2B bulk)"
+    ],
+    "total_usd": 4800.0,
+    "shipping_address": "Acme GmbH, Hauptstraße 9, 20457 Hamburg",
+    "carrier": "UPS",
+    "tracking_id": "UPS-1Z9X7384YW01234567",
+    "estimated_delivery": "2026-05-12",
+    "delivery_days_late": 0,
+    "damaged": true,
+    "payment_method": "INVOICE-PO-ACME-2026-Q2-014"
   }
 }

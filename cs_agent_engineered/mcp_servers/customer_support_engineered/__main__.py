@@ -134,13 +134,25 @@ def get_order(customer_id: str, order_id: str) -> dict:
 def get_customer_orders(customer_id: str, limit: int = 5) -> dict:
     """List a customer's recent orders, most recent first, capped at `limit`.
 
+    The result reports `total` and `truncated`; if `truncated` is true, raise
+    `limit` before concluding an order does not exist.
+
     Use when the customer doesn't give an order number, or when you need
     their history to make a judgment call (e.g., repeat damaged delivery
     signals a warehouse problem, not just a customer one).
     """
     items = _client.get_customer_orders(customer_id)
     items.sort(key=lambda o: o.placed, reverse=True)
-    return {"orders": [o.model_dump(exclude={"customer_id"}) for o in items[:limit]]}
+    shown = items[:limit]
+    # Report the truncation instead of hiding it. A list that looks complete
+    # but silently drops the order the customer is asking about sends the
+    # model looking for the closest match among the rows it can see.
+    return {
+        "orders": [o.model_dump(exclude={"customer_id"}) for o in shown],
+        "returned": len(shown),
+        "total": len(items),
+        "truncated": len(items) > len(shown),
+    }
 
 
 @mcp.tool()

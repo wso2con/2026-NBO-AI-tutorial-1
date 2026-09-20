@@ -222,8 +222,8 @@ class RecoveryTests(unittest.TestCase):
     def test_evaluation_suite_is_computed(self) -> None:
         suite = run_suite(ROOT)
         self.assertEqual(suite["summary"]["total"], len(suite["results"]))
-        self.assertEqual(suite["summary"]["total"], 13)
-        self.assertEqual(suite["summary"]["engineered"], 13)
+        self.assertEqual(suite["summary"]["total"], 14)
+        self.assertEqual(suite["summary"]["engineered"], 14)
         self.assertGreater(suite["summary"]["engineered"], suite["summary"]["first_cut"])
 
     def test_evaluation_covers_every_runnable_ui_scenario(self) -> None:
@@ -231,6 +231,7 @@ class RecoveryTests(unittest.TestCase):
         evaluated = {item["scenario_id"] for item in suite["results"]}
         expected = {
             "foundations-see-loop",
+            "context-repeat-damage",
             "tools-refund-history",
             "tools-net-refund",
             "skills-address-change",
@@ -266,6 +267,7 @@ class RecoveryTests(unittest.TestCase):
             outcomes,
             {
                 "foundations-see-loop": (True, True),
+                "context-repeat-damage": (False, True),
                 "tools-refund-history": (False, True),
                 "tools-net-refund": (False, True),
                 "skills-address-change": (False, True),

@@ -44,6 +44,10 @@ EXPECTED_BEHAVIORS = {
         "first_cut": "The overloaded write contract encourages a full 90% refund without subtracting the prior 10% credit.",
         "engineered": "Cancels first and refunds the remaining 80%, leaving the order at the 90% policy entitlement.",
     },
+    "context-repeat-damage": {
+        "first_cut": "Receives the prior payout wrapped in a legacy envelope, where the fact that #1243 is already settled is easy to skip past.",
+        "engineered": "Receives a typed observation that states the prior refund as a percentage of the order, alongside the damaged-on-arrival status.",
+    },
     "memory-promise-lapse": {
         "first_cut": "Loses the travel deadline and prior promise when conversation history ends.",
         "engineered": "Retrieves the promise after the session boundary and uses it to recognize urgency.",
@@ -145,6 +149,10 @@ def _assertion(name: str, passed: bool) -> dict[str, Any]:
 def run_suite(lab_root: Path) -> dict[str, Any]:
     results: list[dict[str, Any]] = []
 
+    # Reseed first: the client is file-backed, so without this the baseline
+    # keeps whatever was on disk from an earlier run and the suite silently
+    # evaluates stale data after any change to mocks/seeds/.
+    reset_data_files("eval_baseline")
     baseline = CustomerSupportClient(agent_id="eval_baseline")
     order = baseline.get_order("1234")
 
@@ -484,6 +492,61 @@ def run_suite(lab_root: Path) -> dict[str, Any]:
                 "engineered_new_refund_percentage": 0.80,
                 "engineered_total_refunded_percentage": engineered_total,
                 "engineered_write_order": [entry.get("kind") for entry in engineered_entries],
+            },
+        )
+    )
+
+    # Context: a returning customer asking again about an order the ledger has
+    # already settled. Both loops can reach every fact they need through their
+    # own tools; what differs is the shape of the observation each one gets
+    # back. Deterministic checks only - the live behaviour is the demo.
+    damaged_order = baseline.get_order("1243")
+    alice_refunds = baseline.get_refund_history("cust_001")
+    refunds_on_1243 = [e for e in alice_refunds if e.get("order_id") == "1243"]
+    already_refunded_pct = sum(
+        float(e.get("refund_percentage") or 0.0) for e in refunds_on_1243
+    )
+    settled_in_full = abs(already_refunded_pct - 1.0) < 1e-9
+    order_is_damaged = bool(
+        damaged_order
+        and damaged_order.damaged
+        and damaged_order.status == "delivered_damaged"
+    )
+    # The engineered observation types the prior payout as a percentage field;
+    # the first-cut envelope buries the same fact under adapter metadata.
+    legacy_alice = baseline.get_refund_history_legacy("cust_001")
+    engineered_exposes_percentage = bool(
+        refunds_on_1243 and "refund_percentage" in refunds_on_1243[0]
+    )
+    first_cut_buries_it = "@xmlns" in legacy_alice and "RefundEnvelope" in legacy_alice
+    engineered_context_ok = bool(
+        settled_in_full and order_is_damaged and engineered_exposes_percentage
+    )
+    results.append(
+        _result(
+            "context-repeat-damage",
+            "A returning customer with history",
+            not first_cut_buries_it,
+            engineered_context_ok,
+            outcome_assertions=[
+                _assertion("Order #1243 is flagged damaged on arrival", order_is_damaged),
+                _assertion("The ledger already settles #1243 in full", settled_in_full),
+            ],
+            trajectory_assertions=[
+                _assertion(
+                    "Engineered observation types the prior payout as refund_percentage",
+                    engineered_exposes_percentage,
+                ),
+                _assertion(
+                    "First-cut observation wraps the same fact in adapter metadata",
+                    first_cut_buries_it,
+                ),
+            ],
+            evidence={
+                "order": "1243",
+                "status": damaged_order.status if damaged_order else None,
+                "already_refunded_percentage": already_refunded_pct,
+                "first_cut_top_level_keys": list(legacy_alice),
             },
         )
     )
@@ -905,6 +968,7 @@ def run_suite(lab_root: Path) -> dict[str, Any]:
         for index, scenario_id in enumerate(
             (
                 "foundations-see-loop",
+                "context-repeat-damage",
                 "tools-refund-history",
                 "tools-net-refund",
                 "skills-address-change",
