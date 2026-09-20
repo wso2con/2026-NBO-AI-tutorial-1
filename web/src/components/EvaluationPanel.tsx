@@ -2,6 +2,7 @@ import { Check, ChevronRight, X } from "lucide-react";
 import type { EvaluationSuite } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { JsonView } from "./JsonView";
 
 export function EvaluationPanel({ suite, onClose }: { suite: EvaluationSuite; onClose: () => void }) {
   return (
@@ -12,8 +13,8 @@ export function EvaluationPanel({ suite, onClose }: { suite: EvaluationSuite; on
           <div className="text-xs text-muted-foreground">Deterministic checks for outcomes, trajectories, and the reply-release gate</div>
         </div>
         <div className="ml-auto flex gap-4 font-mono text-xs">
-          <span className="text-v1">First-cut {suite.summary.first_cut}/{suite.summary.total}</span>
-          <span className="text-v2">Engineered {suite.summary.engineered}/{suite.summary.total}</span>
+          <span className="text-first-cut">First-cut {suite.summary.first_cut}/{suite.summary.total}</span>
+          <span className="text-engineered">Engineered {suite.summary.engineered}/{suite.summary.total}</span>
         </div>
         <Button variant="ghost" size="icon" onClick={onClose}><X className="h-4 w-4" /></Button>
       </div>
@@ -40,7 +41,10 @@ export function EvaluationPanel({ suite, onClose }: { suite: EvaluationSuite; on
                 <AssertionList title="Engineered outcome assertions" items={result.outcome_assertions} />
                 <AssertionList title="Engineered trajectory assertions" items={result.trajectory_assertions} />
               </div>
-              <pre className="max-h-44 overflow-auto border-t bg-muted/40 px-4 py-3 font-mono text-[10px]">{JSON.stringify(result.evidence, null, 2)}</pre>
+              <div className="border-t bg-muted/40 px-4 py-3">
+                <div className="mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">evidence</div>
+                <JsonView value={result.evidence} maxHeight="max-h-56" />
+              </div>
             </CollapsibleContent>
           </Collapsible>
         ))}
@@ -65,7 +69,7 @@ function AssertionList({ title, items }: { title: string; items: Array<{ name: s
       <div className="space-y-1.5">
         {items.map((item) => (
           <div key={item.name} className="flex items-start gap-1.5">
-            <span className={item.passed ? "text-v2" : "text-destructive"}>{item.passed ? "✓" : "×"}</span>
+            <span className={item.passed ? "text-engineered" : "text-destructive"}>{item.passed ? "✓" : "×"}</span>
             <span>{item.name}</span>
           </div>
         ))}
@@ -76,7 +80,7 @@ function AssertionList({ title, items }: { title: string; items: Array<{ name: s
 
 function Outcome({ passed }: { passed: boolean }) {
   return passed ? (
-    <span className="inline-flex items-center gap-1 text-v2"><Check className="h-3.5 w-3.5" /> pass</span>
+    <span className="inline-flex items-center gap-1 text-engineered"><Check className="h-3.5 w-3.5" /> pass</span>
   ) : (
     <span className="text-destructive">× fail</span>
   );

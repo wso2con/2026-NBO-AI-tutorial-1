@@ -8,6 +8,7 @@ offline suite; this panel proves harness behavior.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any
@@ -23,7 +24,7 @@ from loop_state import (
     validate_response,
     verify_postconditions,
 )
-from cs_agent_v2.agent.skill_contracts import load_skill_contract
+from cs_agent_engineered.agent.skill_contracts import load_skill_contract
 from mocks.client import CustomerSupportClient, reset_data_files
 
 EXPECTED_BEHAVIORS = {
@@ -108,7 +109,7 @@ def success_criteria_for(scenario_id: str, _prompt: str = "") -> list[str]:
 
 
 def _apply_skill_contract(run, lab_root: Path, skill_name: str) -> None:
-    contract = load_skill_contract(lab_root / "cs_agent_v2" / "skills", skill_name)
+    contract = load_skill_contract(lab_root / "cs_agent_engineered" / "skills", skill_name)
     if contract is None:
         raise AssertionError(f"missing contract for {skill_name}")
     apply_task_contract(run, contract, f"skill:{skill_name}")
@@ -146,8 +147,6 @@ def run_suite(lab_root: Path) -> dict[str, Any]:
 
     baseline = CustomerSupportClient(agent_id="eval_baseline")
     order = baseline.get_order("1234")
-    order_owned = bool(order and order.customer_id == "cust_001")
-    order_delayed = bool(order and order.delivery_days_late > 0)
 
     # 1. Foundations: both implementations expose the basic loop. The
     # engineered version adds stronger decisions later in the suite; the
@@ -213,7 +212,11 @@ def run_suite(lab_root: Path) -> dict[str, Any]:
                 _assertion("Refund percentage is a typed field", "refund_percentage" in focused_refunds[0]),
             ],
             trajectory_assertions=[
-                _assertion("Engineered observation avoids the legacy envelope", "RefundEnvelope" not in {"refunds": focused_refunds, "count": len(focused_refunds)}),
+                _assertion(
+                    "Engineered observation avoids the legacy envelope",
+                    "RefundEnvelope" not in json.dumps(focused_refunds)
+                    and "@xmlns" not in json.dumps(focused_refunds),
+                ),
                 _assertion("First-cut observation contains adapter metadata", "@xmlns" in legacy_refunds and "RefundEnvelope" in legacy_refunds),
             ],
             evidence={
@@ -227,14 +230,14 @@ def run_suite(lab_root: Path) -> dict[str, Any]:
     # already obvious from the base prompt.
     address_skill = (
         lab_root
-        / "cs_agent_v2"
+        / "cs_agent_engineered"
         / "skills"
         / "handle-shipping-address-change"
         / "SKILL.md"
     )
     first_address_skill = (
         lab_root
-        / "cs_agent_v1"
+        / "cs_agent_first_cut"
         / "skills"
         / "handle-shipping-address-change"
         / "SKILL.md"
@@ -487,7 +490,7 @@ def run_suite(lab_root: Path) -> dict[str, Any]:
 
     # 5 and 6. Episodic memory: exercise the real file-backed memory helpers
     # in an isolated temporary directory so evaluation never changes demo data.
-    from cs_agent_v2.agent import memory as episodic_memory
+    from cs_agent_engineered.agent import memory as episodic_memory
 
     original_memory_dir = episodic_memory.MEMORY_DIR
     try:
@@ -504,7 +507,7 @@ def run_suite(lab_root: Path) -> dict[str, Any]:
         "Open promise for Alice" in alice_before_session_end
         and alice_after_session_end == alice_before_session_end
     )
-    first_cut_memory_dir = lab_root / "cs_agent_v1" / "memory" / "episodic"
+    first_cut_memory_dir = lab_root / "cs_agent_first_cut" / "memory" / "episodic"
     first_continuity_ok = first_cut_memory_dir.exists()
     results.append(
         _result(
@@ -526,7 +529,7 @@ def run_suite(lab_root: Path) -> dict[str, Any]:
         )
     )
     scope_ok = "Open promise for Alice" not in carol_memory and not carol_memory.strip()
-    first_main_source = (lab_root / "cs_agent_v1" / "main.py").read_text(encoding="utf-8")
+    first_main_source = (lab_root / "cs_agent_first_cut" / "main.py").read_text(encoding="utf-8")
     first_scope_ok = "_AGENTS: dict[str, Agent]" in first_main_source
     results.append(
         _result(
@@ -551,8 +554,8 @@ def run_suite(lab_root: Path) -> dict[str, Any]:
     # 7. Conditional action: verify the shipped procedure encodes the safe
     # branch for an already-shipped order. Model adherence remains a live-run
     # observation and is deliberately not asserted by this deterministic suite.
-    cancel_skill = lab_root / "cs_agent_v2" / "skills" / "handle-cancellation" / "SKILL.md"
-    first_cancel_skill = lab_root / "cs_agent_v1" / "skills" / "handle-cancellation" / "SKILL.md"
+    cancel_skill = lab_root / "cs_agent_engineered" / "skills" / "handle-cancellation" / "SKILL.md"
+    first_cancel_skill = lab_root / "cs_agent_first_cut" / "skills" / "handle-cancellation" / "SKILL.md"
     cancel_text = cancel_skill.read_text(encoding="utf-8") if cancel_skill.exists() else ""
     conditional_ok = bool(
         order
@@ -561,7 +564,7 @@ def run_suite(lab_root: Path) -> dict[str, Any]:
         and "cancellation is not allowed" in cancel_text
         and "search_policy_kb" in cancel_text
     )
-    first_tools_text = (lab_root / "cs_agent_v1" / "tools.py").read_text(encoding="utf-8")
+    first_tools_text = (lab_root / "cs_agent_first_cut" / "tools.py").read_text(encoding="utf-8")
     first_conditional_ok = (
         "def modify_order" not in first_tools_text and first_cancel_skill.exists()
     )
@@ -589,13 +592,13 @@ def run_suite(lab_root: Path) -> dict[str, Any]:
 
     # 10. Trusted identity: verify that only the engineered agent installs a
     # hook that overwrites model-supplied customer IDs.
-    first_agent_source = (lab_root / "cs_agent_v1" / "agent.py").read_text(
+    first_agent_source = (lab_root / "cs_agent_first_cut" / "agent.py").read_text(
         encoding="utf-8"
     )
     engineered_core_source = (
-        lab_root / "cs_agent_v2" / "agent" / "core.py"
+        lab_root / "cs_agent_engineered" / "agent" / "core.py"
     ).read_text(encoding="utf-8")
-    hooks_source = (lab_root / "cs_agent_v2" / "agent" / "hooks.py").read_text(
+    hooks_source = (lab_root / "cs_agent_engineered" / "agent" / "hooks.py").read_text(
         encoding="utf-8"
     )
     first_identity_bound = "hooks_.append(CustomerIdBindingHook" in first_agent_source

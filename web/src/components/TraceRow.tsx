@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { ChevronRight, AlertCircle, CheckCircle2 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { JsonView } from "./JsonView";
 import type { TraceRow as TraceRowData } from "@/lib/types";
 
 interface Props {
@@ -57,32 +58,24 @@ export function TraceRow({ row }: Props) {
       </button>
 
       {open && (
-        <div className="border-t bg-muted/40 px-3 py-2 text-xs">
-          <div className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
-            args
+        <div className="flex flex-col gap-2 border-t bg-muted/40 px-3 py-2 text-xs">
+          <div>
+            <div className="mb-1 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+              args
+            </div>
+            <JsonView value={row.args} maxHeight="max-h-56" />
           </div>
-          <pre className="mt-1 overflow-x-auto whitespace-pre-wrap font-mono">
-            {JSON.stringify(row.args, null, 2)}
-          </pre>
           {hasResult && (
-            <>
-              <div className="mt-2 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+            <div>
+              <div className="mb-1 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
                 {isError ? "result (error)" : "result"}
               </div>
-              <pre
-                className={cn(
-                  "mt-1 overflow-x-auto whitespace-pre-wrap font-mono",
-                  isError && "text-destructive",
-                )}
-              >
-                {typeof row.result === "string"
-                  ? row.result
-                  : JSON.stringify(row.result, null, 2)}
-              </pre>
-            </>
+              <JsonView value={row.result} maxHeight="max-h-72" isError={isError} />
+            </div>
           )}
         </div>
       )}
+
     </div>
   );
 }

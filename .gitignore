@@ -30,13 +30,13 @@ dist/
 
 # Runtime mock state (re-seeded from mocks/seeds/ on first run, or via
 # the /api/reset endpoint on either service). Scoped per-agent under
-# mocks/data/<agent_id>/ — v1 and v2 each have their own files and never
+# mocks/data/<agent_id>/ — first-cut and engineered each have their own files and never
 # share runtime state. See mocks/client.py.
 mocks/data/
 
-# v2 episodic memory (one .md per customer; Bob's seed file is committed).
-cs_agent_v2/memory/episodic/customer_*.md
-!cs_agent_v2/memory/episodic/customer_cust_002.md
+# Engineered-agent episodic memory (one .md per customer; Bob's seed file is committed).
+cs_agent_engineered/memory/episodic/customer_*.md
+!cs_agent_engineered/memory/episodic/customer_cust_002.md
 
-# v2 conversation memory (Strands FileSessionManager — per-customer history).
-cs_agent_v2/memory/sessions/
+# Engineered-agent conversation memory (Strands FileSessionManager — per-customer history).
+cs_agent_engineered/memory/sessions/

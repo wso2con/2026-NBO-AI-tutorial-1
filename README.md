@@ -2,15 +2,17 @@
 
 Two customer-support agents running side-by-side against the same prompt. Same model, same customer message, different harness around the LLM. The diff is the lesson.
 
-## The four parts
+## The parts
 
-The lab runs as three processes plus a shared execution-state and validation layer:
+The lab runs as three processes plus a set of shared lab-root modules and a deterministic validation layer:
 
-- **`cs_agent_v1/`** — the **first-cut** customer-support agent. The kind of thing a competent team ships in week one: identity, refund cap, procedure, and tool list all live in a Python file and the system prompt. Tools are imported in-process and shaped like real internal APIs (one god-tool that does cancel + refund + address change, free-text errors, SOAP-styled responses, atomic micro-getters). One shared `Agent` instance serves every customer. No skills, no MCP, no harness hooks, no episodic memory. v1 is not stupid; it's just what happens when you don't yet know which seams will matter.
+- **`cs_agent_first_cut/`** — the **first-cut** customer-support agent. The kind of thing a competent team ships in week one: identity, refund cap, procedure, and tool list all live in a Python file and the system prompt. Tools are imported in-process and shaped like real internal APIs (one god-tool that does cancel + refund + address change, free-text errors, SOAP-styled responses, atomic micro-getters). One shared `Agent` instance serves every customer. No skills, no MCP, no harness hooks, no episodic memory. The first-cut agent is not stupid; it's just what happens when you don't yet know which seams will matter.
 
-- **`cs_agent_v2/`** — the **improved version**. The same identity and authority live in a declarative `agent-profile.yaml`. Tools are scoped MCP services with typed parameters and structured errors. A `skills/` directory carries procedural know-how and a colocated task contract for validation. Harness hooks bind customer identity, enforce the refund cap, meter real tool dispatches, and capture the exact input before every model call. A per-customer agent cache plus per-customer episodic memory files give continuity. An optional pre-LLM planner separates intent recognition from tool selection.
+- **`cs_agent_engineered/`** — the **improved version**. The same identity and authority live in a declarative `agent-profile.yaml`. Tools are scoped MCP services with typed parameters and structured errors. A `skills/` directory carries procedural know-how and a colocated task contract for validation. Harness hooks bind customer identity, enforce the refund cap, meter real tool dispatches, and capture the exact input before every model call. A per-customer agent cache plus per-customer episodic memory files give continuity. It can also run the shared pre-LLM planner, which separates intent recognition from tool selection.
 
-- **`web/`** — the **comparison UI**. Connects to both agents over HTTP, fans the same prompt out to both in parallel, and renders the two SSE streams side by side. Lets you swap models, customers, and the v2 feature toggles (skills / memory / planner) mid-demo. The merge happens in the browser; there's no dispatcher in the middle.
+- **`web/`** — the **comparison UI**. Connects to both agents over HTTP, fans the same prompt out to both in parallel, and renders the two SSE streams side by side. Lets you swap models, customers, and the feature toggles (skills / memory on the engineered side; planner on both) mid-demo. The merge happens in the browser; there's no dispatcher in the middle.
+
+- **Lab-root modules** — `planner.py`, `run_control.py` and `context_trace.py` are shared by BOTH agents, which put the repo root on `sys.path` and import from it. Neither agent depends on the other. The planner in particular is a harness pattern, not an engineered-only feature: it is available on both panels (with skills disabled on the first-cut side, which has no skills loader) and is **off by default** on both — flip it per panel in the UI.
 
 - **`loop_state.py` and `evaluations.py`** — the explicit harness state and deterministic validation layer. Live success criteria and ordering rules are registered from the Skill the model actually loads, never from the selected demo scenario. Evaluation expectations remain outside both agents. The engineered loop buffers each proposed reply and releases it only after the active task contract passes.
 
@@ -58,8 +60,8 @@ make install
 
 `make install` does:
 
-- Creates `cs_agent_v1/.venv` and installs its Python deps from `cs_agent_v1/pyproject.toml`
-- Creates `cs_agent_v2/.venv` and installs its Python deps from `cs_agent_v2/pyproject.toml`
+- Creates `cs_agent_first_cut/.venv` and installs its Python deps from `cs_agent_first_cut/pyproject.toml`
+- Creates `cs_agent_engineered/.venv` and installs its Python deps from `cs_agent_engineered/pyproject.toml`
 - Runs `npm install` in `web/`
 - Copies `.env.example` to `.env` if it doesn't exist yet
 
@@ -83,8 +85,8 @@ Three processes come up in parallel:
 
 | Process | Port | URL |
 |---|---|---|
-| `cs_agent_v1` | `:8001` | http://localhost:8001 |
-| `cs_agent_v2` | `:8002` | http://localhost:8002 |
+| `cs_agent_first_cut` | `:8001` | http://localhost:8001 |
+| `cs_agent_engineered` | `:8002` | http://localhost:8002 |
 | `web` | `:5173` | http://localhost:5173 |
 
 Open **<http://localhost:5173>** in your browser. Ctrl-C in the terminal stops all three together.
@@ -113,8 +115,8 @@ The validation suite also covers promise continuity across sessions, customer-sc
 Useful for debugging a single agent:
 
 ```bash
-make v1     # cs_agent_v1 only (with --reload)
-make v2     # cs_agent_v2 only (with --reload)
+make first-cut    # cs_agent_first_cut only (with --reload)
+make engineered   # cs_agent_engineered only (with --reload)
 make web    # frontend only
 ```
 
@@ -133,7 +135,7 @@ make reset
 If Bob's episodic memory was modified by `compact_memory()` during a demo:
 
 ```bash
-git restore cs_agent_v2/memory/episodic/customer_cust_002.md
+git restore cs_agent_engineered/memory/episodic/customer_cust_002.md
 ```
 
 ## Verify before presenting
@@ -161,7 +163,7 @@ Removes both venvs, `web/node_modules`, and build artifacts. Re-run `make instal
 - **`make dev` says port 5173 is in use.** Vite walks up the range (`5174`, `5175`, …). Both agents' CORS allowlists cover `:5170`–`:5189`, so any in-range port works.
 - **Port 8001 / 8002 is in use.** `lsof -i :8001` (or `:8002`) to find what's bound. Kill it, or change the ports in the `Makefile` and the `AGENTS` entries in `web/src/lib/api.ts`.
 - **`command not found: bash` on Windows.** Install **Git Bash** or switch to **WSL2** and re-run.
-- **`No such file or directory: 'python'`** when an agent starts. The MCP subprocess can't find `python` on `PATH`. `cs_agent_v2/agent/core.py` substitutes `sys.executable` for `python` / `python3` in the MCP server config — if you still see this, you're on a non-standard Python install; make sure `python3` resolves and the venv was created cleanly.
+- **`No such file or directory: 'python'`** when an agent starts. The MCP subprocess can't find `python` on `PATH`. `cs_agent_engineered/agent/core.py` substitutes `sys.executable` for `python` / `python3` in the MCP server config — if you still see this, you're on a non-standard Python install; make sure `python3` resolves and the venv was created cleanly.
 - **OpenAI auth / 401 errors.** Confirm `OPENAI_API_KEY` is set in `.env` and the key has access to the model selected in the UI (default `gpt-5.4-mini`).
 - **CORS errors in the browser console.** Confirm the web is on `:5170`–`:5189`. The CORS regex in `cs_agent_v*/main.py` covers that range.
 
@@ -171,16 +173,24 @@ Removes both venvs, `web/node_modules`, and build artifacts. Re-run `make instal
 
 ```
 .
-├── cs_agent_v1/        First-cut agent service (port 8001)
-├── cs_agent_v2/        Production-shaped agent service (port 8002)
-├── mocks/              Shared mock backend (Customer / Order / Ledger + seeds)
-├── policies/           Shared policy docs (markdown)
-├── loop_state.py       Explicit run state and structured loop events
-├── evaluations.py      Deterministic outcome, trajectory, and release-gate checks
-├── web/                React + Vite + Tailwind frontend (port 5173)
-├── tests/              Loop-engineering tests
-├── Makefile            make install / dev / v1 / v2 / web / reset / clean
-├── reset.py            Reset script used when services aren't running
-├── .env.example        Copy to .env, paste OPENAI_API_KEY
-└── README.md           This file
+├── cs_agent_first_cut/   First-cut agent service (port 8001)
+├── cs_agent_engineered/  Engineered agent service (port 8002)
+├── mocks/                Shared mock backend (Customer / Order / Ledger + seeds)
+├── policies/             Shared policy docs (markdown)
+├── web/                  React + Vite + Tailwind frontend (port 5173)
+├── tests/                Loop-engineering tests
+│
+│   Lab-root modules — both agents put this directory on sys.path and
+│   import from it, so neither agent depends on the other:
+├── loop_state.py         Explicit run state and structured loop events
+├── run_control.py        ToolBudgetHook — shared tool-dispatch metering
+├── context_trace.py      ContextTraceHook — pre-model-call context capture
+├── planner.py            Shared pre-LLM planner (agent-agnostic; off by default)
+├── evaluations.py        Deterministic outcome, trajectory, and release-gate checks
+├── budget_demo.py        Deterministic budget trajectory used by evaluations/tests
+├── reset.py              Reset script used when services aren't running
+│
+├── Makefile              make install / dev / first-cut / engineered / web / reset / clean
+├── .env.example          Copy to .env, paste OPENAI_API_KEY
+└── README.md             This file
 ```

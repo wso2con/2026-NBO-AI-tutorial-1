@@ -22,8 +22,9 @@ class SessionMemory:
 
 @dataclass
 class EpisodicMemory:
-    # Past-sessions per-customer summary in memory/customer_<id>.md, loaded
-    # fully into the system prompt at agent build.
+    # Past-sessions per-customer summary in memory/episodic/customer_<id>.md,
+    # injected into the first user message of a new session (see
+    # agent/core.py::prepend_memory).
     enabled: bool = False
     # Char-count above which the system prompt nudges the agent to call
     # `compact_memory()` to summarize. 0 disables the nudge.
@@ -41,7 +42,8 @@ class PlannerConfig:
     # When enabled, every /api/run kicks off a small non-streaming LLM call
     # BEFORE the main agent to produce a <plan> block (intent, approach,
     # info_needed, skills, policies). The plan is prepended to the user
-    # message. See `agent/planner.py`.
+    # message. Implemented in `planner.py` at the lab root and shared with
+    # cs_agent_first_cut.
     enabled: bool = False
 
 
@@ -146,7 +148,7 @@ def load_profile(path: Path = PROFILE_PATH) -> Profile:
     ]
 
     return Profile(
-        agent_id=agent_section.get("id", "cs-agent-v1"),
+        agent_id=agent_section.get("id", "cs-agent-engineered"),
         name=agent_section.get("name", "Customer Support Agent"),
         model=agent_section.get("model", "gpt-4o-2024-08-06"),
         language=agent_section.get("language", "English"),

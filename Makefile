@@ -6,7 +6,7 @@
 #   make dev       run all three services (Ctrl-C stops everything)
 #
 # Individual targets if you want one service at a time for debugging:
-#   make v1 / make v2 / make web
+#   make first-cut / make engineered / make web
 #
 # Maintenance:
 #   make reset     restore mocks from seeds, clear non-seeded memory
@@ -14,14 +14,14 @@
 
 SHELL := /bin/bash
 
-.PHONY: help install dev v1 v2 web test reset clean
+.PHONY: help install dev first-cut engineered web test reset clean
 
 help:
 	@echo "Targets:"
 	@echo "  make install   — create per-agent venvs, install Python + Node deps"
-	@echo "  make dev       — start v1 (:8001), v2 (:8002), web (:5173) together"
-	@echo "  make v1        — start cs_agent_v1 only"
-	@echo "  make v2        — start cs_agent_v2 only"
+	@echo "  make dev       — start first-cut (:8001), engineered (:8002), web (:5173) together"
+	@echo "  make first-cut — start cs_agent_first_cut only"
+	@echo "  make engineered — start cs_agent_engineered only"
 	@echo "  make web       — start the React frontend only"
 	@echo "  make test      — run loop-engineering tests + production web build"
 	@echo "  make reset     — restore mocks from seeds, wipe non-seeded memory"
@@ -32,10 +32,10 @@ help:
 # ---------------------------------------------------------------------------
 
 install:
-	@echo "→ cs_agent_v1: venv + deps"
-	cd cs_agent_v1 && python3 -m venv .venv && .venv/bin/pip install -q -U pip && .venv/bin/pip install -q .
-	@echo "→ cs_agent_v2: venv + deps"
-	cd cs_agent_v2 && python3 -m venv .venv && .venv/bin/pip install -q -U pip && .venv/bin/pip install -q .
+	@echo "→ cs_agent_first_cut: venv + deps"
+	cd cs_agent_first_cut && python3 -m venv .venv && .venv/bin/pip install -q -U pip && .venv/bin/pip install -q .
+	@echo "→ cs_agent_engineered: venv + deps"
+	cd cs_agent_engineered && python3 -m venv .venv && .venv/bin/pip install -q -U pip && .venv/bin/pip install -q .
 	@echo "→ web: npm deps"
 	cd web && npm install --silent
 	@echo "→ .env"
@@ -57,22 +57,22 @@ install:
 # group on Ctrl-C so you don't end up with orphaned uvicorn/vite processes.
 dev:
 	@trap 'kill 0' SIGINT SIGTERM; \
-	  (cd cs_agent_v1 && .venv/bin/uvicorn main:app --port 8001 --log-level warning) & \
-	  (cd cs_agent_v2 && .venv/bin/uvicorn main:app --port 8002 --log-level warning) & \
+	  (cd cs_agent_first_cut && .venv/bin/uvicorn main:app --port 8001 --log-level warning) & \
+	  (cd cs_agent_engineered && .venv/bin/uvicorn main:app --port 8002 --log-level warning) & \
 	  (cd web && npm run dev) & \
 	  wait
 
-v1:
-	cd cs_agent_v1 && .venv/bin/uvicorn main:app --port 8001 --reload
+first-cut:
+	cd cs_agent_first_cut && .venv/bin/uvicorn main:app --port 8001 --reload
 
-v2:
-	cd cs_agent_v2 && .venv/bin/uvicorn main:app --port 8002 --reload
+engineered:
+	cd cs_agent_engineered && .venv/bin/uvicorn main:app --port 8002 --reload
 
 web:
 	cd web && npm run dev
 
 test:
-	cs_agent_v2/.venv/bin/python -m unittest discover -s tests -v
+	cs_agent_engineered/.venv/bin/python -m unittest discover -s tests -v
 	cd web && npm run build
 
 # ---------------------------------------------------------------------------
@@ -86,7 +86,7 @@ reset:
 	python3 reset.py
 
 clean:
-	rm -rf cs_agent_v1/.venv cs_agent_v2/.venv web/node_modules
-	rm -rf cs_agent_v1/build cs_agent_v1/*.egg-info
-	rm -rf cs_agent_v2/build cs_agent_v2/*.egg-info
+	rm -rf cs_agent_first_cut/.venv cs_agent_engineered/.venv web/node_modules
+	rm -rf cs_agent_first_cut/build cs_agent_first_cut/*.egg-info
+	rm -rf cs_agent_engineered/build cs_agent_engineered/*.egg-info
 	find . -type d -name __pycache__ -prune -exec rm -rf {} + 2>/dev/null || true

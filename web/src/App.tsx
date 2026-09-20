@@ -56,21 +56,21 @@ export default function App() {
   const [scenariosOpen, setScenariosOpen] = useState(false);
   const [selectedScenarioId, setSelectedScenarioId] = useState<string | null>(null);
   const [scenarioRunId, setScenarioRunId] = useState<string | null>(null);
-  const [v1, setV1] = useState<AgentState>(emptyAgentState);
-  const [v2, setV2] = useState<AgentState>(emptyAgentState);
-  // v2-only feature toggles. `skills` / `episodic` default OFF so the v2
+  const [firstCut, setFirstCut] = useState<AgentState>(emptyAgentState);
+  const [engineered, setEngineered] = useState<AgentState>(emptyAgentState);
+  // engineered-only feature toggles. `skills` / `episodic` default OFF so the engineered
   // panel starts as a bare-bones agent; the presenter flips them on during
   // the demo to show the lift each feature provides. Flipping skills or
-  // episodic is destructive (rebuilds the agent) and triggers a full v2
+  // episodic is destructive (rebuilds the agent) and triggers a full engineered
   // reset; `planner` is a per-request decision (the planner is a separate
   // LLM call, not part of the agent build) and flips freely without reset.
-  const [v2SkillsEnabled, setV2SkillsEnabled] = useState(false);
-  const [v2EpisodicEnabled, setV2EpisodicEnabled] = useState(false);
-  const [v2PlannerEnabled, setV2PlannerEnabled] = useState(false);
-  // v1's planner uses the same shared `planner.py` module as v2. v1 has
+  const [engineeredSkillsEnabled, setEngineeredSkillsEnabled] = useState(false);
+  const [engineeredEpisodicEnabled, setEngineeredEpisodicEnabled] = useState(false);
+  const [engineeredPlannerEnabled, setEngineeredPlannerEnabled] = useState(false);
+  // first-cut's planner uses the same shared `planner.py` module as engineered. first-cut has
   // no skills loader, so the planner always runs with skills_enabled=false.
-  // Independent of v2's toggle — flip per panel.
-  const [v1PlannerEnabled, setV1PlannerEnabled] = useState(false);
+  // Independent of engineered's toggle — flip per panel.
+  const [firstCutPlannerEnabled, setFirstCutPlannerEnabled] = useState(false);
   // Holds the toggle the user is mid-flipping while the confirm dialog is
   // up. Cleared on confirm or cancel. Only `skills` / `episodic` need this
   // — planner has no rebuild and skips the dialog entirely.
@@ -79,76 +79,76 @@ export default function App() {
   >(null);
   // Tool catalog per agent — fetched once on mount. Tools don't change
   // between requests, so we don't refetch on send/reset.
-  const [v1Tools, setV1Tools] = useState<AgentTool[]>([]);
-  const [v2Tools, setV2Tools] = useState<AgentTool[]>([]);
+  const [firstCutTools, setFirstCutTools] = useState<AgentTool[]>([]);
+  const [engineeredTools, setEngineeredTools] = useState<AgentTool[]>([]);
   // Counter the MemoryDrawer watches to know when to refetch the file.
-  // Bumped after a v2 turn finishes, after reset, and after next-session.
-  const [v2MemoryRefreshKey, setV2MemoryRefreshKey] = useState(0);
+  // Bumped after a engineered turn finishes, after reset, and after next-session.
+  const [engineeredMemoryRefreshKey, setEngineeredMemoryRefreshKey] = useState(0);
   const bumpV2Memory = useCallback(
-    () => setV2MemoryRefreshKey((k) => k + 1),
+    () => setEngineeredMemoryRefreshKey((k) => k + 1),
     [],
   );
-  const [v1ToolsLoading, setV1ToolsLoading] = useState(true);
-  const [v2ToolsLoading, setV2ToolsLoading] = useState(true);
-  const [v1ToolsError, setV1ToolsError] = useState<string | null>(null);
-  const [v2ToolsError, setV2ToolsError] = useState<string | null>(null);
+  const [firstCutToolsLoading, setFirstCutToolsLoading] = useState(true);
+  const [engineeredToolsLoading, setEngineeredToolsLoading] = useState(true);
+  const [firstCutToolsError, setFirstCutToolsError] = useState<string | null>(null);
+  const [engineeredToolsError, setEngineeredToolsError] = useState<string | null>(null);
   const [resetMsg, setResetMsg] = useState<string | null>(null);
   const [evaluation, setEvaluation] = useState<EvaluationSuite | null>(null);
   const abortRef = useRef<AbortController | null>(null);
 
-  // v1 tools are static — fetch once at mount.
+  // first-cut tools are static — fetch once at mount.
   useEffect(() => {
     let cancelled = false;
-    fetchTools(AGENTS.v1)
+    fetchTools(AGENTS.first_cut)
       .then((tools) => {
         if (cancelled) return;
-        setV1Tools(tools);
-        setV1ToolsError(null);
+        setFirstCutTools(tools);
+        setFirstCutToolsError(null);
       })
       .catch((err) => {
         if (cancelled) return;
-        setV1ToolsError(err instanceof Error ? err.message : String(err));
+        setFirstCutToolsError(err instanceof Error ? err.message : String(err));
       })
       .finally(() => {
         if (cancelled) return;
-        setV1ToolsLoading(false);
+        setFirstCutToolsLoading(false);
       });
     return () => {
       cancelled = true;
     };
   }, []);
 
-  // v2 tools depend on the feature toggles — refetch whenever they flip so
+  // engineered tools depend on the feature toggles — refetch whenever they flip so
   // the drawer matches what the agent actually has registered.
   useEffect(() => {
     let cancelled = false;
-    setV2ToolsLoading(true);
-    fetchTools(AGENTS.v2, {
-      skills_enabled: v2SkillsEnabled,
-      episodic_enabled: v2EpisodicEnabled,
+    setEngineeredToolsLoading(true);
+    fetchTools(AGENTS.engineered, {
+      skills_enabled: engineeredSkillsEnabled,
+      episodic_enabled: engineeredEpisodicEnabled,
     })
       .then((tools) => {
         if (cancelled) return;
-        setV2Tools(tools);
-        setV2ToolsError(null);
+        setEngineeredTools(tools);
+        setEngineeredToolsError(null);
       })
       .catch((err) => {
         if (cancelled) return;
-        setV2ToolsError(err instanceof Error ? err.message : String(err));
+        setEngineeredToolsError(err instanceof Error ? err.message : String(err));
       })
       .finally(() => {
         if (cancelled) return;
-        setV2ToolsLoading(false);
+        setEngineeredToolsLoading(false);
       });
     return () => {
       cancelled = true;
     };
-  }, [v2SkillsEnabled, v2EpisodicEnabled]);
+  }, [engineeredSkillsEnabled, engineeredEpisodicEnabled]);
 
   const setters = useMemo(
     (): Record<AgentVariant, React.Dispatch<React.SetStateAction<AgentState>>> => ({
-      v1: setV1,
-      v2: setV2,
+      first_cut: setFirstCut,
+      engineered: setEngineered,
     }),
     [],
   );
@@ -157,7 +157,7 @@ export default function App() {
     const last = s.turns[s.turns.length - 1];
     return last?.status === "running";
   };
-  const anyRunning = lastTurnRunning(v1) || lastTurnRunning(v2);
+  const anyRunning = lastTurnRunning(firstCut) || lastTurnRunning(engineered);
 
   const updateTurn = useCallback(
     (variant: AgentVariant, turnId: string, updater: (t: Turn) => Turn) => {
@@ -222,9 +222,9 @@ export default function App() {
             status: "done",
             final_reply: ev.final_reply || t.streaming_reply,
           }));
-          // The v2 agent may have appended to its episodic memory file
+          // The engineered agent may have appended to its episodic memory file
           // during this turn; nudge the MemoryDrawer to refetch.
-          if (variant === "v2") bumpV2Memory();
+          if (variant === "engineered") bumpV2Memory();
           break;
         case "error":
           updateTurn(variant, turnId, (t) => ({
@@ -269,13 +269,13 @@ export default function App() {
         ? crypto.randomUUID()
         : `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
     const comparisonRunId = selectedScenarioId && scenarioRunId ? scenarioRunId : freshRunId;
-    const v1Turn = v1.enabled ? { ...newTurn(prompt), run_id: comparisonRunId } : null;
-    const v2Turn = v2.enabled ? { ...newTurn(prompt), run_id: comparisonRunId } : null;
+    const firstCutTurn = firstCut.enabled ? { ...newTurn(prompt), run_id: comparisonRunId } : null;
+    const engineeredTurn = engineered.enabled ? { ...newTurn(prompt), run_id: comparisonRunId } : null;
 
-    if (!v1Turn && !v2Turn) return; // both off → nothing to do
+    if (!firstCutTurn && !engineeredTurn) return; // both off → nothing to do
 
-    if (v1Turn) setV1((s) => ({ ...s, turns: [...s.turns, v1Turn] }));
-    if (v2Turn) setV2((s) => ({ ...s, turns: [...s.turns, v2Turn] }));
+    if (firstCutTurn) setFirstCut((s) => ({ ...s, turns: [...s.turns, firstCutTurn] }));
+    if (engineeredTurn) setEngineered((s) => ({ ...s, turns: [...s.turns, engineeredTurn] }));
     setResetMsg(null);
 
     const controller = new AbortController();
@@ -289,14 +289,14 @@ export default function App() {
           model: selectedModel,
           run_id: comparisonRunId,
           tool_budget: toolBudget,
-          ...(variant === "v2"
+          ...(variant === "engineered"
             ? {
-                skills_enabled: v2SkillsEnabled,
-                episodic_enabled: v2EpisodicEnabled,
-                planner_enabled: v2PlannerEnabled,
+                skills_enabled: engineeredSkillsEnabled,
+                episodic_enabled: engineeredEpisodicEnabled,
+                planner_enabled: engineeredPlannerEnabled,
               }
             : {
-                planner_enabled: v1PlannerEnabled,
+                planner_enabled: firstCutPlannerEnabled,
               }),
           signal: controller.signal,
           onEvent: handleEvent(variant, turnId),
@@ -312,27 +312,27 @@ export default function App() {
       }
     };
 
-    // Kick off v2 first — v2 has the MCP-subprocess spawn cost and the
+    // Kick off engineered first — engineered has the MCP-subprocess spawn cost and the
     // AgentSkills injection on first request, so it's slower to issue the
-    // first SSE chunk. v1 fires immediately after; both still stream
+    // first SSE chunk. first-cut fires immediately after; both still stream
     // concurrently, but the head start helps the two columns finish
     // visually in sync on the projector.
     const launches: Promise<void>[] = [];
-    if (v2Turn) launches.push(launch(AGENTS.v2, "v2", v2Turn.id));
-    if (v1Turn) launches.push(launch(AGENTS.v1, "v1", v1Turn.id));
+    if (engineeredTurn) launches.push(launch(AGENTS.engineered, "engineered", engineeredTurn.id));
+    if (firstCutTurn) launches.push(launch(AGENTS.first_cut, "first_cut", firstCutTurn.id));
     await Promise.allSettled(launches);
   }
 
   async function reset() {
     abortRef.current?.abort();
     // Clear chat history on both columns but keep their enabled toggles.
-    setV1((s) => ({ ...s, turns: [] }));
-    setV2((s) => ({ ...s, turns: [] }));
+    setFirstCut((s) => ({ ...s, turns: [] }));
+    setEngineered((s) => ({ ...s, turns: [] }));
     setToolBudget(DEFAULT_TOOL_BUDGET);
     setResetMsg("resetting…");
     try {
-      await Promise.all([resetAgent(AGENTS.v1), resetAgent(AGENTS.v2)]);
-      // /api/reset wipes v2's non-seed episodic-memory files, so the
+      await Promise.all([resetAgent(AGENTS.first_cut), resetAgent(AGENTS.engineered)]);
+      // /api/reset wipes engineered's non-seed episodic-memory files, so the
       // drawer's cached content is stale.
       bumpV2Memory();
       setResetMsg("both agents reset");
@@ -346,13 +346,13 @@ export default function App() {
     setters[variant]((s) => ({ ...s, enabled: !s.enabled }));
   }
 
-  /** Stage a v2 feature toggle behind the confirm dialog. Because skills
+  /** Stage a engineered feature toggle behind the confirm dialog. Because skills
    *  and episodic memory are baked into the agent at build time
    *  (system_prompt / tools / plugins), the cached agent no longer matches
-   *  the new toggle — so flipping requires a full v2 reset. */
+   *  the new toggle — so flipping requires a full engineered reset. */
   function toggleV2Feature(feature: "skills" | "episodic") {
     if (anyRunning) return;
-    const current = feature === "skills" ? v2SkillsEnabled : v2EpisodicEnabled;
+    const current = feature === "skills" ? engineeredSkillsEnabled : engineeredEpisodicEnabled;
     setPendingV2Toggle({ feature, next: !current });
   }
 
@@ -363,21 +363,21 @@ export default function App() {
     const { feature, next } = pendingV2Toggle;
     setPendingV2Toggle(null);
 
-    if (feature === "skills") setV2SkillsEnabled(next);
-    else setV2EpisodicEnabled(next);
+    if (feature === "skills") setEngineeredSkillsEnabled(next);
+    else setEngineeredEpisodicEnabled(next);
 
     await reset();
   }
 
   /** Simulate "time has passed" for the episodic-memory demo. Both agents'
    *  cached Agent is dropped (server-side and client-side conversation
-   *  memory wiped), but v2's episodic memory file on disk persists. A
+   *  memory wiped), but engineered's episodic memory file on disk persists. A
    *  divider is appended in each panel's thread to mark the boundary. */
   async function nextSession() {
     if (anyRunning) return;
     setToolBudget(DEFAULT_TOOL_BUDGET);
     // Mark a divider after the last turn in each enabled panel.
-    setV1((s) => {
+    setFirstCut((s) => {
       if (s.turns.length === 0) return s;
       return {
         ...s,
@@ -386,7 +386,7 @@ export default function App() {
         ),
       };
     });
-    setV2((s) => {
+    setEngineered((s) => {
       if (s.turns.length === 0) return s;
       return {
         ...s,
@@ -398,8 +398,8 @@ export default function App() {
     setResetMsg("new session…");
     try {
       await Promise.all([
-        endSession(AGENTS.v1, customerId),
-        endSession(AGENTS.v2, customerId),
+        endSession(AGENTS.first_cut, customerId),
+        endSession(AGENTS.engineered, customerId),
       ]);
       // The file is preserved server-side, but a refetch confirms that
       // for the audience (and re-renders the drawer with the same chars).
@@ -533,7 +533,7 @@ export default function App() {
             size="sm"
             onClick={nextSession}
             disabled={anyRunning}
-            title="Simulate 'time has passed'. Drops conversation memory on both sides; v2's episodic memory file persists."
+            title="Simulate 'time has passed'. Drops conversation memory on both sides; the engineered agent's episodic memory file persists."
           >
             <Hourglass className="mr-1 h-3.5 w-3.5" />
             end session
@@ -562,32 +562,32 @@ export default function App() {
         <div className="flex min-h-0 flex-1 flex-col gap-4">
           <main className="grid min-h-0 flex-1 grid-cols-2 gap-4">
             <AgentPanel
-              service={AGENTS.v1}
-              state={v1}
-              tools={v1Tools}
-              toolsLoading={v1ToolsLoading}
-              toolsError={v1ToolsError}
-              onToggleEnabled={() => toggleEnabled("v1")}
-              plannerEnabled={v1PlannerEnabled}
+              service={AGENTS.first_cut}
+              state={firstCut}
+              tools={firstCutTools}
+              toolsLoading={firstCutToolsLoading}
+              toolsError={firstCutToolsError}
+              onToggleEnabled={() => toggleEnabled("first_cut")}
+              plannerEnabled={firstCutPlannerEnabled}
               onTogglePlanner={() => {
                 // Planner toggle is per-request — no agent rebuild, no
-                // confirm dialog, no reset. Same shape as v2's planner
+                // confirm dialog, no reset. Same shape as engineered's planner
                 // toggle, just independent state.
                 if (anyRunning) return;
-                setV1PlannerEnabled((v) => !v);
+                setFirstCutPlannerEnabled((v) => !v);
               }}
               featuresDisabled={anyRunning}
             />
             <AgentPanel
-              service={AGENTS.v2}
-              state={v2}
-              tools={v2Tools}
-              toolsLoading={v2ToolsLoading}
-              toolsError={v2ToolsError}
-              onToggleEnabled={() => toggleEnabled("v2")}
-              skillsEnabled={v2SkillsEnabled}
-              episodicEnabled={v2EpisodicEnabled}
-              plannerEnabled={v2PlannerEnabled}
+              service={AGENTS.engineered}
+              state={engineered}
+              tools={engineeredTools}
+              toolsLoading={engineeredToolsLoading}
+              toolsError={engineeredToolsError}
+              onToggleEnabled={() => toggleEnabled("engineered")}
+              skillsEnabled={engineeredSkillsEnabled}
+              episodicEnabled={engineeredEpisodicEnabled}
+              plannerEnabled={engineeredPlannerEnabled}
               onToggleSkills={() => toggleV2Feature("skills")}
               onToggleEpisodic={() => toggleV2Feature("episodic")}
               onTogglePlanner={() => {
@@ -595,11 +595,11 @@ export default function App() {
                 // confirm dialog, no reset. The next /api/run picks up
                 // the new value via the request body.
                 if (anyRunning) return;
-                setV2PlannerEnabled((v) => !v);
+                setEngineeredPlannerEnabled((v) => !v);
               }}
               featuresDisabled={anyRunning}
               customerId={customerId}
-              memoryRefreshKey={v2MemoryRefreshKey}
+              memoryRefreshKey={engineeredMemoryRefreshKey}
             />
           </main>
           <footer className="shrink-0 pb-4">
@@ -634,7 +634,7 @@ export default function App() {
               }?`
             : ""
         }
-        description="This triggers a full reset, same as the reset button. Both agents' chat history and mock data will be cleared, and v2's non-seed episodic memory will be wiped."
+        description="This triggers a full reset, same as the reset button. Both agents' chat history and mock data will be cleared, and the engineered agent's non-seed episodic memory will be wiped."
         confirmLabel="reset"
         destructive
         onConfirm={confirmV2Toggle}

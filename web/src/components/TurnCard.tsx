@@ -1,7 +1,5 @@
 import { useEffect, useRef } from "react";
-import ReactMarkdown from "react-markdown";
-import remarkBreaks from "remark-breaks";
-import { User, AlertCircle, ChevronRight, ListChecks, Activity } from "lucide-react";
+import { User, AlertCircle, ChevronRight, ListChecks } from "lucide-react";
 import {
   Collapsible,
   CollapsibleContent,
@@ -10,6 +8,9 @@ import {
 import { cn } from "@/lib/utils";
 import type { Turn } from "@/lib/types";
 import { TraceRow } from "./TraceRow";
+import { LoopTrajectory } from "./LoopTrajectory";
+import { Markdown } from "./Markdown";
+import { TextViewer } from "./TextViewer";
 
 interface Props {
   turn: Turn;
@@ -49,46 +50,21 @@ export function TurnCard({ turn, isLatest }: Props) {
         </div>
       </div>
 
-      {/* Plan — v2 + planner-enabled only. Shown inline (not a drawer) so
+      {/* Plan — engineered + planner-enabled only. Shown inline (not a drawer) so
           the audience can read the planner's intent / approach / skills /
           policies decision before any tool call streams in. */}
       {turn.plan && (
         <div className="ml-9 rounded-md border bg-muted px-3 py-2 text-xs">
-          <div className="mb-1.5 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-v2">
+          <div className="mb-1.5 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-engineered">
             <ListChecks className="h-3.5 w-3.5" />
             plan
           </div>
-          <pre className="whitespace-pre-wrap break-words font-mono text-[11px] leading-relaxed text-foreground/90">
-            {turn.plan}
-          </pre>
+          <TextViewer text={turn.plan} allowRendered={false} maxHeight="max-h-72" />
         </div>
       )}
 
       {turn.loop_events.length > 0 && (
-        <div className="ml-9 overflow-hidden rounded-md border bg-muted/30 text-xs">
-          <div className="flex items-center gap-1.5 border-b px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-            <Activity className="h-3.5 w-3.5" />
-            loop trajectory
-          </div>
-          <div className="divide-y">
-            {turn.loop_events.map((event, index) => (
-              <Collapsible key={`${event.type}-${index}`}>
-                <CollapsibleTrigger className="group flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-accent">
-                  <ChevronRight className="h-3 w-3 shrink-0 transition-transform group-data-[state=open]:rotate-90" />
-                  <span className="w-32 shrink-0 font-mono text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
-                    {event.type.replaceAll("_", " ")}
-                  </span>
-                  <span className="min-w-0 flex-1 truncate">{event.summary}</span>
-                </CollapsibleTrigger>
-                <CollapsibleContent>
-                  <pre className="max-h-64 overflow-auto whitespace-pre-wrap border-t bg-background px-3 py-2 font-mono text-[10px] leading-relaxed">
-                    {JSON.stringify(event, null, 2)}
-                  </pre>
-                </CollapsibleContent>
-              </Collapsible>
-            ))}
-          </div>
-        </div>
+        <LoopTrajectory events={turn.loop_events} />
       )}
 
       {/* Drawers: framed message + system prompt */}
@@ -142,9 +118,7 @@ export function TurnCard({ turn, isLatest }: Props) {
               <span className="inline-block h-1 w-1 animate-pulse rounded-full bg-muted-foreground" />
             )}
           </div>
-          <div className="prose prose-sm max-w-none leading-relaxed dark:prose-invert prose-p:my-2 prose-headings:my-2 prose-ul:my-2 prose-ol:my-2 prose-li:my-0.5 prose-pre:my-2">
-            <ReactMarkdown remarkPlugins={[remarkBreaks]}>{reply}</ReactMarkdown>
-          </div>
+          <Markdown density="reply">{reply}</Markdown>
         </div>
       )}
     </div>
@@ -171,9 +145,12 @@ function Drawer({ label, suffix, charCount, content, maxHeight }: DrawerProps) {
         </span>
       </CollapsibleTrigger>
       <CollapsibleContent className="overflow-hidden data-[state=open]:animate-accordion-down data-[state=closed]:animate-accordion-up">
-        <pre className={cn("overflow-auto whitespace-pre-wrap border-t px-2 py-1.5 font-mono", maxHeight)}>
-          {content}
-        </pre>
+        <div className="border-t p-1.5">
+          {/* Raw by default: the drawer exists to show the literal bytes the
+              model received. "rendered" is one click away for the audience
+              that wants to read it as the document it was authored as. */}
+          <TextViewer text={content} defaultView="raw" maxHeight={maxHeight} />
+        </div>
       </CollapsibleContent>
     </Collapsible>
   );

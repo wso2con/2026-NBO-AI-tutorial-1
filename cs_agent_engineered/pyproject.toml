@@ -1,5 +1,5 @@
 [project]
-name = "cs-agent-v2"
+name = "cs-agent-engineered"
 version = "0.1.0"
 description = "Production-shaped customer-support agent — declarative profile, scoped identity, harness-bound customer_id + refund cap, typed MCP servers, skills, episodic + conversation memory. Half of the side-by-side comparison."
 requires-python = ">=3.11"
@@ -9,12 +9,14 @@ dependencies = [
     "pydantic>=2.0",
     "python-dotenv>=1.0.0",
 
-    # v2-specific: MCP subprocesses (policy_kb, customer_support) and the
+    # engineered-specific: MCP subprocesses (policy_kb, customer_support) and the
     # declarative agent-profile.yaml the harness reads at startup.
-    "mcp>=1.0.0",
+    # Pinned to 1.x: mcp 2.x renamed FastMCP → MCPServer and both servers
+    # in mcp_servers/ use the 1.x FastMCP API.
+    "mcp>=1.0.0,<2",
     "pyyaml>=6.0",
 
-    # HTTP shell — same FastAPI / SSE wire as cs_agent_v1.
+    # HTTP shell — same FastAPI / SSE wire as cs_agent_first_cut.
     "fastapi>=0.136.1",
     "uvicorn[standard]>=0.27.0",
     "sse-starlette>=2.0.0",

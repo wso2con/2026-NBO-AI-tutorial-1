@@ -47,14 +47,23 @@ export default {
           DEFAULT: "hsl(var(--card))",
           foreground: "hsl(var(--card-foreground))",
         },
-        // Two semantic colors that identify v1 vs v2 in the UI.
-        v1: {
-          DEFAULT: "hsl(var(--v1))",
-          foreground: "hsl(var(--v1-foreground))",
+        // Two semantic colors that identify first-cut vs engineered in the UI.
+        "first-cut": {
+          DEFAULT: "hsl(var(--first-cut))",
+          foreground: "hsl(var(--first-cut-foreground))",
         },
-        v2: {
-          DEFAULT: "hsl(var(--v2))",
-          foreground: "hsl(var(--v2-foreground))",
+        engineered: {
+          DEFAULT: "hsl(var(--engineered))",
+          foreground: "hsl(var(--engineered-foreground))",
+        },
+        // Syntax palette for the JSON / raw-text viewers.
+        code: {
+          key: "hsl(var(--code-key))",
+          string: "hsl(var(--code-string))",
+          number: "hsl(var(--code-number))",
+          bool: "hsl(var(--code-bool))",
+          null: "hsl(var(--code-null))",
+          punct: "hsl(var(--code-punct))",
         },
       },
       borderRadius: {

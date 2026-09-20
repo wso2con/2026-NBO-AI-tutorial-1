@@ -1,8 +1,8 @@
-// Event shapes match what cs_agent_v1/main.py and cs_agent_v2/main.py emit
+// Event shapes match what cs_agent_first_cut/main.py and cs_agent_engineered/main.py emit
 // as SSE frames. Keep these in sync with the Python `_run_agent_stream`
 // generators on both services.
 
-export type AgentVariant = "v1" | "v2";
+export type AgentVariant = "first_cut" | "engineered";
 
 export interface SystemPromptEvent {
   type: "system_prompt";
@@ -15,7 +15,7 @@ export interface UserMessageEvent {
 }
 
 export interface PlanEvent {
-  // v2 only — emitted right after /api/run starts if the planner toggle
+  // engineered only — emitted right after /api/run starts if the planner toggle
   // is on. The content is the planner's <plan>…</plan> block, ready to
   // render verbatim. Frontend without a handler drops this silently.
   type: "plan";
@@ -109,7 +109,7 @@ export interface Turn {
   user_prompt: string;       // what the user typed
   framed_message: string;    // what the server reported handing to the LLM
   system_prompt: string;     // the rendered system prompt for this turn
-  // v2 + planner-enabled only: the planner's <plan>…</plan> block, which
+  // engineered + planner-enabled only: the planner's <plan>…</plan> block, which
   // also lives inside `framed_message`. Surfaced as a separate field so
   // the trace UI can render it as its own visible step.
   plan?: string;

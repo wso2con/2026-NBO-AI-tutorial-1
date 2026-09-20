@@ -1,9 +1,9 @@
-"""Shared policy-KB retrieval — same code path for v1 and v2.
+"""Shared policy-KB retrieval — same code path for first-cut and engineered.
 
 Both agents read from the same `policies/*.md` files using the same
 keyword-scored matcher and return the same shape. The DIFFERENCE
-between the two agents is in framing, not substance: v1 exposes this
-via `search_kb` with a one-line docstring; v2 exposes it via
+between the two agents is in framing, not substance: first-cut exposes this
+via `search_kb` with a one-line docstring; engineered exposes it via
 `search_policy_kb` over MCP with a docstring that says "always call
 this BEFORE compensating actions" and a `handle-refund` skill that
 names the procedure. Same evidence on the table; different ergonomics

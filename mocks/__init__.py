@@ -1,4 +1,4 @@
-"""Mock backend used by both cs_agent_v1 and cs_agent_v2.
+"""Mock backend used by both cs_agent_first_cut and cs_agent_engineered.
 
 CustomerSupportClient is constructed with an `agent_id` and reads/writes
 its own files under `mocks/data/<agent_id>/`. The canonical seeds at

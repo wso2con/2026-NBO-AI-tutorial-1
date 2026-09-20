@@ -15,7 +15,7 @@ from loop_state import (
     verify_postconditions,
 )
 from mocks.client import CustomerSupportClient, reset_data_files
-from cs_agent_v2.agent.skill_contracts import load_skill_contract
+from cs_agent_engineered.agent.skill_contracts import load_skill_contract
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -81,7 +81,7 @@ class LoopStateTests(unittest.TestCase):
             goal="apply shipping credit",
         )
         contract = load_skill_contract(
-            ROOT / "cs_agent_v2" / "skills", "handle-cancellation"
+            ROOT / "cs_agent_engineered" / "skills", "handle-cancellation"
         )
         self.assertIsNotNone(contract)
         apply_task_contract(run, contract or {}, "skill:handle-cancellation")
@@ -98,7 +98,7 @@ class LoopStateTests(unittest.TestCase):
             customer_id="cust_001",
             goal="apply late credit",
         )
-        contract = load_skill_contract(ROOT / "cs_agent_v2" / "skills", "handle-refund")
+        contract = load_skill_contract(ROOT / "cs_agent_engineered" / "skills", "handle-refund")
         self.assertIsNotNone(contract)
         apply_task_contract(run, contract or {}, "skill:handle-refund")
         record_tool_call(run, "get_order", {"order_id": "1234"})

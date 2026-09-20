@@ -4,11 +4,11 @@
 # Python harness in agent/core.py is a loader; everything below is what
 # the agent actually has.
 #
-# To apply edits: type `exit` in the REPL, then run `python run.py`
-# again. The agent is built once per launch — there is no hot-reload.
+# To apply edits: restart the service (`make engineered`). The agent is
+# built once per launch — there is no hot-reload.
 
 agent:
-  id: cs-agent-v2
+  id: cs-agent-engineered
   name: Customer Support Agent
   model: gpt-5.4-mini
   language: English
@@ -64,7 +64,7 @@ mcp_servers:
     args: ["-m", "mcp_servers.policy_kb"]
   - name: customer_support
     command: python
-    args: ["-m", "mcp_servers.customer_support_v2"]
+    args: ["-m", "mcp_servers.customer_support_engineered"]
 
 # §3 demo. Two memory layers wired here, one stub for the audience to fill in.
 #
@@ -99,7 +99,8 @@ memory:
 # user message so the main agent reads intent BEFORE picking tools.
 # Separates intent recognition from tool selection — the main agent can't
 # pattern-match its way past "what does the customer actually want?".
-# See cs_agent_v2/agent/planner.py. Flip via the UI toggle for the demo.
+# Implemented in `planner.py` at the lab root (shared with cs_agent_first_cut).
+# Flip via the UI toggle for the demo.
 planner:
   enabled: true
 

@@ -1,7 +1,8 @@
-"""MCP server: the customer-support backend, redesigned for agents (v2).
+"""MCP server: the customer-support backend, redesigned for agents (engineered).
 
 The "good" side of the §2a contrast. Same backend, same data, same
-capabilities as `customer_support_v1` — but every tool was rewritten with
+capabilities as the first-cut agent's in-process `tools.py` — but every tool
+was rewritten with
 the agent in mind: action-verb names, typed parameters, structured returns,
 explicit error contracts.
 
@@ -48,7 +49,7 @@ logging.basicConfig(level=logging.WARNING)
 for noisy in ("mcp", "mcp.server", "mcp.server.lowlevel", "FastMCP"):
     logging.getLogger(noisy).setLevel(logging.WARNING)
 
-mcp = FastMCP("customer-support-v2")
+mcp = FastMCP("customer-support-engineered")
 
 # State at launch. The server reads the same agent-profile.yaml as the
 # agent — single source of truth for agent_id / name / refund_cap. In a
@@ -60,8 +61,8 @@ _identity = AgentIdentity(
     name=_profile.name,
     refund_cap_usd=_profile.refund_cap_usd,
 )
-# The mock backend's data files are scoped to this agent_id so v2's writes
-# never leak into v1's view of the world (and vice versa).
+# The mock backend's data files are scoped to this agent_id so engineered's writes
+# never leak into first-cut's view of the world (and vice versa).
 _client = CustomerSupportClient(agent_id=_profile.agent_id)
 
 
@@ -406,7 +407,7 @@ def escalate_to_human(
 
       ❌ BAD:  "Customer: Alice Chen, standard tier. Orders touched:
                 #1234. Audit: refund_0002 store credit $10 issued
-                2026-05-16 by cs-agent-v2. What I did: get_order,
+                2026-05-16 by cs-agent-engineered. What I did: get_order,
                 get_refund_history, search_policy_kb (shipping_delay).
                 Requested action: human review to approve refund to card
                 OR offer replacement..."

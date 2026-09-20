@@ -1,5 +1,5 @@
 [project]
-name = "cs-agent-v1"
+name = "cs-agent-first-cut"
 version = "0.1.0"
 description = "First-cut customer-support agent — in-process bad tools, no scoped identity, no skills, no MCP. Half of the side-by-side comparison."
 requires-python = ">=3.11"
@@ -9,7 +9,7 @@ dependencies = [
     "pydantic>=2.0",
     "python-dotenv>=1.0.0",
 
-    # HTTP shell — same FastAPI / SSE wire as cs_agent_v2 so the React
+    # HTTP shell — same FastAPI / SSE wire as cs_agent_engineered so the React
     # frontend can treat both services identically.
     "fastapi>=0.136.1",
     "uvicorn[standard]>=0.27.0",

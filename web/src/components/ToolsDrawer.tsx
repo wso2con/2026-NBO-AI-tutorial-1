@@ -6,6 +6,8 @@ import {
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
 import { cn } from "@/lib/utils";
+import { CopyButton } from "@/components/ui/copy-button";
+import { JsonView } from "./JsonView";
 import type { AgentTool } from "@/lib/api";
 
 interface Props {
@@ -21,8 +23,8 @@ interface Props {
  * collapsible at the panel level; each tool inside is further
  * click-expandable to show its full description and input schema.
  *
- * The v1↔v2 contrast lands here: v1 has 14 tools with one-line
- * docstrings; v2 has 13 typed MCP specs with rich descriptions.
+ * The first-cut↔engineered contrast lands here: first-cut has 14 tools with one-line
+ * docstrings; engineered has 13 typed MCP specs with rich descriptions.
  */
 export function ToolsDrawer({ tools, loading, error }: Props) {
   return (
@@ -89,9 +91,15 @@ function ToolRow({ tool }: { tool: AgentTool }) {
       {open && (
         <div className="border-t bg-background px-4 py-2.5 text-xs">
           {description && (
-            <pre className="mb-2 whitespace-pre-wrap font-sans leading-relaxed text-foreground">
-              {description}
-            </pre>
+            <div className="mb-2 flex items-start gap-2">
+              {/* Tool descriptions are prose docstrings, not markdown —
+                  rendering them would only invent structure the model never
+                  sees. Kept verbatim, wrapped, in the UI font. */}
+              <pre className="min-w-0 flex-1 whitespace-pre-wrap font-sans leading-relaxed text-foreground">
+                {description}
+              </pre>
+              <CopyButton value={description} title="Copy description" />
+            </div>
           )}
           {paramNames.length > 0 ? (
             <>
@@ -126,6 +134,16 @@ function ToolRow({ tool }: { tool: AgentTool }) {
             <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
               no parameters
             </div>
+          )}
+          {tool.inputSchema?.json && (
+            <details className="mt-2">
+              <summary className="cursor-pointer text-[10px] uppercase tracking-wider text-muted-foreground hover:text-foreground">
+                raw input schema
+              </summary>
+              <div className="mt-1.5">
+                <JsonView value={tool.inputSchema.json} defaultExpandDepth={1} maxHeight="max-h-56" />
+              </div>
+            </details>
           )}
         </div>
       )}

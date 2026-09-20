@@ -1,6 +1,6 @@
 """Planner — a small LLM call that runs BEFORE the main agent on every turn.
 
-Shared module: both `cs_agent_v1` and `cs_agent_v2` import this same file
+Shared module: both `cs_agent_first_cut` and `cs_agent_engineered` import this same file
 from the lab root. Per-agent differences (which tools exist, whether
 skills are wired) are passed in via keyword arguments — the planner
 itself is agent-agnostic.
@@ -26,8 +26,8 @@ Catalogue strategy:
   agent has, with no drift. When called without a `tools_catalogue`
   override, falls back to a hardcoded list (kept for tests / REPL).
 - **Skills**: caller passes either a catalogue string or sets
-  `skills_enabled=False` to drop the skills section entirely. v1 has no
-  skills loader, so it always passes `skills_enabled=False`. v2 passes
+  `skills_enabled=False` to drop the skills section entirely. first-cut has no
+  skills loader, so it always passes `skills_enabled=False`. engineered passes
   `skills_enabled=bool(profile.skills_dir)`.
 - **Policies**: auto-discovered from `policies/*.md` frontmatter at the
   lab root (same `policies/` directory both agents share).
@@ -73,7 +73,7 @@ def _parse_frontmatter(content: str) -> dict[str, str]:
 def skills_catalogue_from_dir(skills_dir: Path | str) -> str:
     """`name — description` per SKILL.md frontmatter, sorted by skill dir.
 
-    Public helper: callers (i.e. v2's main.py) can pass their resolved
+    Public helper: callers (i.e. engineered's main.py) can pass their resolved
     skills directory in. Used by `plan_for_prompt`'s default skill-catalogue
     fallback when `skills_enabled=True` and no override is supplied.
     """
@@ -126,9 +126,9 @@ def format_tool_specs(tool_specs: list[dict]) -> str:
 
 
 def _tools_catalogue_fallback() -> str:
-    """Hardcoded mirror of v2's MCP tool surface, used only when the caller
-    doesn't pass a live tools catalogue (tests, REPL). v1's tools are
-    differently shaped, so v1 must always pass a live catalogue via
+    """Hardcoded mirror of engineered's MCP tool surface, used only when the caller
+    doesn't pass a live tools catalogue (tests, REPL). first-cut's tools are
+    differently shaped, so first-cut must always pass a live catalogue via
     `format_tool_specs(agent.tool_registry.get_all_tool_specs())`."""
     return """\
 - lookup_customer — customer profile (name, tier, contact)
@@ -242,7 +242,7 @@ async def plan_for_prompt(
         skills_enabled: When False, the planner is told skills aren't
             available this turn and is instructed NOT to emit a `skills:`
             field. Pass `False` whenever the main agent doesn't have the
-            AgentSkills plugin loaded (v1 always; v2 when the skills
+            AgentSkills plugin loaded (first-cut always; engineered when the skills
             toggle is off). Otherwise the plan can suggest skills the
             agent has no way to load.
 

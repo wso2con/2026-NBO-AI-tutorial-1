@@ -2,10 +2,11 @@
 
 Each customer's prior interactions are stored as a markdown file at
 `memory/episodic/customer_<id>.md`. When `memory.episodic.enabled` is true in
-agent-profile.yaml, the file is loaded fully into the agent's system
-prompt at agent build (see `agent/core.py::_memory_section`). Conversation
-history (within-session chat) is separate — it's `agent.messages` on the
-per-customer cached Agent in `main.py`, no on-disk transcript.
+agent-profile.yaml, the file is injected into the FIRST USER MESSAGE of a new
+session by `agent/core.py::prepend_memory` — not into the system prompt, which
+carries only the protocol from `_memory_protocol()`. Conversation history
+(within-session chat) is separate — it's `agent.messages` on the per-customer
+cached Agent in `main.py`, no on-disk transcript.
 
 Same pattern as Claude Code's `CLAUDE.md` + `MEMORY.md`, GitHub Copilot's
 `.github/copilot-instructions.md`, ChatGPT's bio. Production agents with
@@ -31,8 +32,24 @@ from strands import tool
 MEMORY_DIR = Path(__file__).parent.parent / "memory" / "episodic"
 
 
+class InvalidCustomerId(ValueError):
+    """Raised when a customer_id cannot be used as a memory filename."""
+
+
 def _path(customer_id: str) -> Path:
-    return MEMORY_DIR / f"customer_{customer_id}.md"
+    """Resolve a customer's memory file, refusing anything that escapes MEMORY_DIR.
+
+    `customer_id` reaches this module from the HTTP layer (`/api/memory`) and
+    from model-proposed tool arguments, so it is untrusted input. Without this
+    check a value like `../../secrets` would resolve outside the memory
+    directory and turn a memory read into an arbitrary file read.
+    """
+    if not customer_id or Path(customer_id).name != customer_id:
+        raise InvalidCustomerId(f"invalid customer_id: {customer_id!r}")
+    path = (MEMORY_DIR / f"customer_{customer_id}.md").resolve()
+    if MEMORY_DIR.resolve() not in path.parents:
+        raise InvalidCustomerId(f"invalid customer_id: {customer_id!r}")
+    return path
 
 
 def load(customer_id: str) -> str:

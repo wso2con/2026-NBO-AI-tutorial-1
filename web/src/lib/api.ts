@@ -29,22 +29,22 @@ export const DEFAULT_MODEL: SupportedModel = "gpt-5.4-mini";
 export interface AgentService {
   variant: AgentVariant;
   baseUrl: string;
-  label: string;       // e.g. "Customer Support · v1"
-  caption: string;     // e.g. "cs-agent-v1"
+  label: string;       // e.g. "Customer Support · first-cut"
+  caption: string;     // e.g. "cs-agent-first-cut"
 }
 
 export const AGENTS: Record<AgentVariant, AgentService> = {
-  v1: {
-    variant: "v1",
+  first_cut: {
+    variant: "first_cut",
     baseUrl: "http://localhost:8001",
     label: "FIRST-CUT LOOP",
-    caption: "cs-agent-v1 · broad, implicit control",
+    caption: "cs-agent-first-cut · broad, implicit control",
   },
-  v2: {
-    variant: "v2",
+  engineered: {
+    variant: "engineered",
     baseUrl: "http://localhost:8002",
     label: "ENGINEERED LOOP",
-    caption: "cs-agent-v2 · explicit harness",
+    caption: "cs-agent-engineered · explicit harness",
   },
 };
 
@@ -52,7 +52,7 @@ export interface RunArgs {
   prompt: string;
   customer_id: string;
   model?: string;
-  // v2 feature toggles. Ignored by v1.
+  // engineered feature toggles. Ignored by first-cut.
   skills_enabled?: boolean;
   episodic_enabled?: boolean;
   // `planner_enabled` is per-request — no agent rebuild needed, so it can
@@ -173,7 +173,7 @@ export interface AgentMemory {
   content: string;
 }
 
-/** GET /api/memory — the customer's episodic-memory file. v2 only; v1
+/** GET /api/memory — the customer's episodic-memory file. engineered only; first-cut
  *  has no episodic memory. Returns `exists: false` with an empty
  *  `content` when no file has been written yet. */
 export async function fetchMemory(
@@ -201,8 +201,8 @@ export interface AgentTool {
 }
 
 /** GET /api/tools — list of tools this agent has registered.
- *  v2 honors `skills_enabled` / `episodic_enabled` query params so the
- *  drawer matches the live tool set for the current toggle state. v1
+ *  engineered honors `skills_enabled` / `episodic_enabled` query params so the
+ *  drawer matches the live tool set for the current toggle state. first-cut
  *  ignores them. UI refetches whenever the toggles flip. */
 export async function fetchTools(
   svc: AgentService,
@@ -240,7 +240,7 @@ export interface EvaluationSuite {
 }
 
 export async function runEvaluationSuite(): Promise<EvaluationSuite> {
-  const response = await fetch(`${AGENTS.v2.baseUrl}/api/evaluations/run`, { method: "POST" });
+  const response = await fetch(`${AGENTS.engineered.baseUrl}/api/evaluations/run`, { method: "POST" });
   if (!response.ok) throw new Error(`evaluation suite returned ${response.status}`);
   return (await response.json()) as EvaluationSuite;
 }

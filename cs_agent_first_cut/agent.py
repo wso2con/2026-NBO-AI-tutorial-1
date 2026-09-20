@@ -1,4 +1,4 @@
-"""Build the v1 ("first-cut") customer-support agent.
+"""Build the first-cut customer-support agent.
 
 This is what a customer-support agent looks like when a competent engineer
 ships a first version: clear identity, sensible authority section, a
@@ -31,14 +31,14 @@ The mistakes show up as things that ARE NOT here:
   - No per-customer agent cache. A single shared Agent instance serves
     every caller, so `agent.messages` survives between requests but ALSO
     leaks across customers (Alice's chat shows up in Bob's session).
-    v2 fixes this with a `customer_id → Agent` registry; v1 ships one
+    engineered fixes this with a `customer_id → Agent` registry; first-cut ships one
     Agent and hopes nobody notices. Server restart wipes the singleton.
   - No episodic memory. The agent has no recall of prior sessions —
     a returning customer is treated as new every time.
 
-Each of these is fixed in cs_agent_v2. The point of running them side-by-
-side isn't to embarrass v1; it's to show which problems the audience's
-own v1-shaped agent probably has, and how each piece of v2's structure
+Each of these is fixed in cs_agent_engineered. The point of running them side-by-
+side isn't to embarrass first-cut; it's to show which problems the audience's
+own first-cut-shaped agent probably has, and how each piece of engineered's structure
 earns its keep.
 """
 
@@ -106,20 +106,20 @@ just wants their issue handled, so handle it. Avoid long responses as much as po
 
 
 def frame_prompt(customer_id: str, prompt: str) -> str:
-    """Inline customer_id into the user message — v1's weak tenancy seam.
+    """Inline customer_id into the user message — first-cut's weak tenancy seam.
 
-    LLM is the principal; prompt injection can move the boundary. v2
+    LLM is the principal; prompt injection can move the boundary. engineered
     binds via `CustomerIdBindingHook` instead.
     """
     return f"[Session note: customer in session is {customer_id}.]\n\n{prompt}"
 
 
 def build_agent(model: str | None = None) -> Agent:
-    """Build a v1 agent. `model` defaults to MODEL_ID."""
+    """Build a first-cut agent. `model` defaults to MODEL_ID."""
     return Agent(
         agent_id=AGENT_ID,
         name=AGENT_NAME,
-        description="Customer support agent (v1)",
+        description="Customer support agent (first-cut)",
         model=OpenAIModel(model_id=model or MODEL_ID),
         conversation_manager=SlidingWindowConversationManager(window_size=CONVERSATION_WINDOW),
         system_prompt=SYSTEM_PROMPT,

@@ -3,14 +3,14 @@
 Runs as a subprocess of the agent (launched via Strands' MCPClient from
 agent/core.py). The agent calls `search_policy_kb(query)` like a native
 tool; under the hood, this server delegates to `policies.search.search`
-— the same retrieval v1's `search_kb` uses. Same corpus, same scoring,
+— the same retrieval first-cut's `search_kb` uses. Same corpus, same scoring,
 same return shape.
 
 The §6 Plan-before-commit lesson is intentionally NOT about retrieval
 quality differences. Both agents have the same evidence available. What
 differs is framing: this tool's docstring says "always call this BEFORE
-compensating actions" and v2 has a `handle-refund` skill that names the
-procedure; v1's wrapper has a one-line docstring and no skill. Same
+compensating actions" and engineered has a `handle-refund` skill that names the
+procedure; first-cut's wrapper has a one-line docstring and no skill. Same
 KB; different ergonomics; different agent behaviour.
 
 In production this would be a hosted service owned by the policy /
@@ -32,7 +32,7 @@ for noisy in ("mcp", "mcp.server", "mcp.server.lowlevel", "FastMCP"):
     logging.getLogger(noisy).setLevel(logging.WARNING)
 
 # Lab root on sys.path so we can import the shared `policies.search`
-# module. This file is at cs_agent_v2/mcp_servers/policy_kb/__main__.py
+# module. This file is at cs_agent_engineered/mcp_servers/policy_kb/__main__.py
 # — four parents up is the repo root.
 _LAB_ROOT = Path(__file__).parent.parent.parent.parent
 if str(_LAB_ROOT) not in sys.path:

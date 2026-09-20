@@ -6,10 +6,9 @@ every `MCPClient` is passed straight to `Agent(tools=[...])` so Strands'
 ToolProvider lifecycle owns the subprocesses end-to-end (`start()` on
 first tool load; `stop()` when the Agent is GC'd / loses its last consumer).
 
-For the §2a hands-on: edit the YAML to swap `customer_support_v1` for
-`customer_support_v2`, type `exit`, run `python run.py` again. No
-hot-reload — keeping the build path one direction makes the architecture
-obvious on stage.
+For the §2a hands-on: edit `mcp_servers` in the YAML and restart the
+service (`make engineered`). There is no hot-reload — keeping the build path
+one direction makes the architecture obvious on stage.
 """
 
 import os
@@ -28,13 +27,14 @@ from agent import memory
 from agent.hooks import CustomerIdBindingHook, RefundCapHook
 from agent.profile import MCPServerConfig, Profile, load_profile
 
-# This service's root — cs_agent_v2/. Everything lives below it: skills,
+# This service's root — cs_agent_engineered/. Everything lives below it: skills,
 # policies, memory, mocks, mcp_servers, profile YAML.
 ROOT = Path(__file__).parent.parent
-# Episodic memory directory — written by the `append_memory` / `compact_memory`
-# tools, loaded into the system prompt at agent build. Conversation memory
-# is now just `agent.messages` on the per-customer cached agent (see
-# main.py's `_AGENTS`); no separate session-storage tree needed.
+# Episodic memory lives in `memory/episodic/` — written by the
+# `append_memory` / `compact_memory` tools and injected into the FIRST USER
+# MESSAGE by `prepend_memory` (the system prompt carries only the protocol).
+# Conversation memory is `agent.messages` on the per-customer cached agent
+# (see main.py's `_AGENTS`); no separate session-storage tree needed.
 
 
 # ---------------------------------------------------------------------------
@@ -70,21 +70,22 @@ def make_mcp_client(config: MCPServerConfig) -> MCPClient:
 
 
 def _memory_protocol() -> str:
-    return """You have episodic memory: short notes about prior sessions with each "
-        "customer. When present for the current customer, the notes arrive at "
-        "the top of their first user message of a new session, wrapped in "
-        "`<episodic_memory>…</episodic_memory>` tags.\n\n"
-        "How to use it:\n"
-        "- **Pointers, not data.** Use notes to know what to look up and how to "
-        "frame the reply. Numbers / IDs (refund refs, ticket IDs, amounts) MUST "
-        "be re-verified via the matching read tool before you act on them — the "
-        "audit ledger is the source of truth, memory may be stale.\n"
-        "- **Tone matters.** A note like \"second damaged delivery; tone pointed\" "
-        "should shape your phrasing and your escalation threshold.\n"
-        "- **Close the loop.** Before the turn ends, call `append_memory(customer_id="
-        "\"\", note=<short>)` with the things tools CAN'T tell the next session: "
-        "open promises, patterns, tone. Strip anything an API would return. "
-        "Keep it small."""
+    return """You have episodic memory: short notes about prior sessions with each
+customer. When present for the current customer, the notes arrive at the top of
+their first user message of a new session, wrapped in
+`<episodic_memory>...</episodic_memory>` tags.
+
+How to use it:
+- **Pointers, not data.** Use notes to know what to look up and how to frame the
+  reply. Numbers / IDs (refund refs, ticket IDs, amounts) MUST be re-verified via
+  the matching read tool before you act on them - the audit ledger is the source
+  of truth, memory may be stale.
+- **Tone matters.** A note like "second damaged delivery; tone pointed" should
+  shape your phrasing and your escalation threshold.
+- **Close the loop.** Before the turn ends, call
+  `append_memory(customer_id="", note=<short>)` with the things tools CAN'T tell
+  the next session: open promises, patterns, tone. Strip anything an API would
+  return. Keep it small."""
 
 
 def prepend_memory(
@@ -144,9 +145,9 @@ def _build_instructions(
 
 
 def frame_prompt(customer_id: str, prompt: str) -> str:
-    """No-op for v2 — customer_id is bound by `CustomerIdBindingHook`, not inlined.
+    """No-op for engineered — customer_id is bound by `CustomerIdBindingHook`, not inlined.
 
-    Parallels `cs_agent_v1/agent.py::frame_prompt` (which DOES inline it).
+    Parallels `cs_agent_first_cut/agent.py::frame_prompt` (which DOES inline it).
     """
     _ = customer_id  # hook does the binding
     return prompt
@@ -215,7 +216,7 @@ def build_agent(
     if customer_id:
         hooks_.append(CustomerIdBindingHook(customer_id=customer_id))
     # Enforce the agent's scoped refund authority at the harness, so even a
-    # prompt-injected agent cannot exceed its cap. The v2 MCP server has a
+    # prompt-injected agent cannot exceed its cap. The engineered MCP server has a
     # matching server-side check as defense in depth — the hook just makes
     # sure the bad call never reaches the wire.
     hooks_.append(
@@ -236,9 +237,9 @@ def build_agent(
         hooks=hooks_,
         conversation_manager=conversation_manager,
         # Suppress Strands' default PrintingCallbackHandler — it streams text
-        # chunks straight to stdout (no newlines), which collides with our own
-        # trace rendering in run.py. We collect tokens from stream_async events
-        # ourselves and render the final reply inside a Rich Panel.
+        # chunks straight to stdout (no newlines), which would interleave with
+        # this service's logs. main.py collects tokens from stream_async events
+        # itself and forwards them to the browser as SSE `text_delta` events.
         callback_handler=None,
     )
     return agent

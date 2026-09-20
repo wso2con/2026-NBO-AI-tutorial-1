@@ -1,4 +1,4 @@
-"""FastAPI entrypoint for cs_agent_v2 — the hardened, production-shaped agent.
+"""FastAPI entrypoint for cs_agent_engineered — the hardened, production-shaped agent.
 
 Run:  uvicorn main:app --reload --port 8002
 
@@ -7,7 +7,7 @@ Endpoints:
     POST /api/reset  Wipe this agent's mock data + episodic memory.
     GET  /health     Liveness probe.
 
-The browser fans out the same prompt to v1's port (8001) and this port
+The browser fans out the same prompt to first-cut's port (8001) and this port
 (8002) in parallel, then renders the two SSE streams side by side. No
 dispatcher service is needed — the merge happens in the frontend.
 """
@@ -21,7 +21,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-# The shared mocks/ package lives at the lab root, next to cs_agent_v2/.
+# The shared mocks/ package lives at the lab root, next to cs_agent_engineered/.
 # Put it on sys.path before anything imports it (including MCP subprocesses,
 # which inherit our environment).
 _LAB_ROOT = Path(__file__).parent.parent
@@ -29,7 +29,7 @@ if str(_LAB_ROOT) not in sys.path:
     sys.path.insert(0, str(_LAB_ROOT))
 
 from dotenv import load_dotenv
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from sse_starlette.sse import EventSourceResponse
@@ -37,7 +37,7 @@ from sse_starlette.sse import EventSourceResponse
 # Load .env BEFORE importing the agent — OPENAI_API_KEY must be visible
 # to the OpenAI client and to MCP subprocesses (which inherit env).
 # Single `.env` at the repo root is the canonical place; a per-agent
-# `cs_agent_v2/.env` is supported as an optional override.
+# `cs_agent_engineered/.env` is supported as an optional override.
 load_dotenv(_LAB_ROOT / ".env")
 load_dotenv(Path(__file__).parent / ".env", override=False)
 
@@ -60,7 +60,7 @@ from strands import Agent
 from strands.models.openai import OpenAIModel
 
 logging.basicConfig(level=logging.INFO)
-log = logging.getLogger("cs_agent_v2")
+log = logging.getLogger("cs_agent_engineered")
 
 PROFILE = load_profile()
 EPISODIC_DIR = ROOT / "memory" / "episodic"
@@ -201,7 +201,7 @@ def _extract_tool_result_body(block: dict) -> Any:
 
 async def _run_agent_stream(agent: Agent, prompt: str, *, run_state):
     """Yield SSE events for one agent turn."""
-    # Echo the exact message handed to the LLM. v2 doesn't frame anything
+    # Echo the exact message handed to the LLM. engineered doesn't frame anything
     # at the message layer (identity is bound by CustomerIdBindingHook at
     # the tool layer), so this is just the raw prompt.
     yield {
@@ -323,7 +323,7 @@ async def _run_agent_stream(agent: Agent, prompt: str, *, run_state):
             "event": "context_iteration",
             "data": json.dumps(
                 {
-                    "run_id": run_id,
+                    "run_id": run_state.run_id,
                     "summary": f"Actual context sent to model call {emitted_contexts}",
                     "model_call": emitted_contexts,
                     **snapshot,
@@ -361,7 +361,7 @@ class RunRequest(BaseModel):
     prompt: str
     customer_id: str
     model: str | None = None  # Per-request override; falls back to PROFILE.model.
-    # UI toggles for v2 features. Null falls back to profile defaults.
+    # UI toggles for engineered features. Null falls back to profile defaults.
     # `skills_enabled` and `episodic_enabled` require a session reset (the
     # agent is cached and its system_prompt / tools / plugins are baked at
     # build time), so the frontend calls /api/reset before sending a request
@@ -375,7 +375,7 @@ class RunRequest(BaseModel):
     tool_budget: int | None = None
 
 
-app = FastAPI(title="cs_agent_v2", version="0.1.0")
+app = FastAPI(title="cs_agent_engineered", version="0.1.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -388,7 +388,7 @@ app.add_middleware(
 
 @app.get("/health")
 def health() -> dict[str, Any]:
-    return {"status": "ok", "agent": "cs_agent_v2", "agent_id": PROFILE.agent_id}
+    return {"status": "ok", "agent": "cs_agent_engineered", "agent_id": PROFILE.agent_id}
 
 
 @app.get("/api/tools")
@@ -418,12 +418,18 @@ def get_memory(customer_id: str) -> dict[str, Any]:
 
     The endpoint is unconditional so the UI can show "empty" vs "missing"
     states. The web frontend gates whether to surface the drawer at all
-    behind the v2 episodic_enabled toggle."""
-    from agent.memory import _path, load
+    behind the engineered episodic_enabled toggle."""
+    from agent.memory import InvalidCustomerId, _path, load
 
+    try:
+        exists = _path(customer_id).exists()
+    except InvalidCustomerId:
+        # `customer_id` is untrusted query input; _path refuses anything that
+        # would escape the memory directory. Answer 400 rather than 500.
+        raise HTTPException(status_code=400, detail="invalid customer_id")
     return {
         "customer_id": customer_id,
-        "exists": _path(customer_id).exists(),
+        "exists": exists,
         "content": load(customer_id),
     }
 
@@ -453,8 +459,8 @@ async def run(req: RunRequest):
     # same chat continues with a different backend.
     agent.model = OpenAIModel(model_id=req.model or PROFILE.model)
 
-    # frame_prompt lives in agent/core.py — parallels cs_agent_v1's
-    # `frame_prompt`. v2's version is a no-op: customer_id is bound by
+    # frame_prompt lives in agent/core.py — parallels cs_agent_first_cut's
+    # `frame_prompt`. engineered's version is a no-op: customer_id is bound by
     # CustomerIdBindingHook, not inlined into the message.
     framed_prompt = frame_prompt(req.customer_id, req.prompt)
 
@@ -464,7 +470,8 @@ async def run(req: RunRequest):
     # user message so the main agent reads intent BEFORE picking tools.
     # Separating intent recognition from tool selection is what stops the
     # main agent from pattern-matching on "late order → refund" and missing
-    # what the customer actually wants. See agent/planner.py.
+    # what the customer actually wants. Implemented in `planner.py` at the
+    # lab root and shared with cs_agent_first_cut.
     #
     # Gated by `profile.planner.enabled` so the UI toggle / YAML flag can
     # flip it off mid-demo to show the regression. The planner sees the
@@ -483,8 +490,8 @@ async def run(req: RunRequest):
             # Only let the planner suggest skills if the main agent
             # actually has the AgentSkills plugin loaded — otherwise the
             # plan would point at procedures the agent can't load. When
-            # enabled, pass v2's skills directory in so the planner can
-            # read the live SKILL.md frontmatter (it lives in cs_agent_v2/,
+            # enabled, pass engineered's skills directory in so the planner can
+            # read the live SKILL.md frontmatter (it lives in cs_agent_engineered/,
             # which the lab-root planner.py doesn't know about by default).
             skills_dir = effective_profile.skills_dir
             skills_cat = (
@@ -812,11 +819,11 @@ async def run(req: RunRequest):
 
 @app.post("/api/reset")
 def reset() -> dict[str, Any]:
-    """Reset writable state: wipe v2's mock data on disk and reseed,
+    """Reset writable state: wipe engineered's mock data on disk and reseed,
     rebuild agents (which respawns MCP subprocesses that re-read the
     fresh data files), clear non-seed episodic memory."""
     # Mock data is file-backed on disk and scoped per-agent — wiping
-    # v2's files here leaves v1's state alone. The freshly spawned v2
+    # engineered's files here leaves first-cut's state alone. The freshly spawned engineered
     # MCP subprocesses on the next /api/run pull from seeds.
     from mocks.client import reset_data_files
     reset_data_files(PROFILE.agent_id)
@@ -832,7 +839,7 @@ def reset() -> dict[str, Any]:
             if f.name != "customer_cust_002.md":
                 f.unlink()
 
-    return {"ok": True, "agent": "cs_agent_v2"}
+    return {"ok": True, "agent": "cs_agent_engineered"}
 
 
 @app.get("/api/state/{run_id}")
@@ -870,4 +877,4 @@ def end_session(req: EndSessionRequest) -> dict[str, Any]:
         _AGENTS.pop(req.customer_id, None)
     else:
         _AGENTS.clear()
-    return {"ok": True, "agent": "cs_agent_v2", "ended": req.customer_id or "all"}
+    return {"ok": True, "agent": "cs_agent_engineered", "ended": req.customer_id or "all"}

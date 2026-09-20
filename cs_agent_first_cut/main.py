@@ -1,4 +1,4 @@
-"""FastAPI entrypoint for cs_agent_v1 — the first-cut, unscoped agent.
+"""FastAPI entrypoint for cs_agent_first_cut — the first-cut, unscoped agent.
 
 Run:  uvicorn main:app --reload --port 8001
 
@@ -12,7 +12,7 @@ request — `agent.messages` accumulates in-process, so the agent has
 short-term memory between turns. The catch: there's no per-customer
 isolation, so the same conversation history is visible to every caller
 (Alice's chat shows up in Bob's session). Process restart wipes it.
-That's the v1 footgun the lab demonstrates — v2 fixes it with a
+That's the first-cut footgun the lab demonstrates — engineered fixes it with a
 per-customer agent cache.
 """
 
@@ -24,8 +24,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
-# The shared mocks/ package lives at the lab root, next to cs_agent_v1/
-# and cs_agent_v2/. Put it on sys.path before anything that imports it.
+# The shared mocks/ package lives at the lab root, next to cs_agent_first_cut/
+# and cs_agent_engineered/. Put it on sys.path before anything that imports it.
 _LAB_ROOT = Path(__file__).parent.parent
 if str(_LAB_ROOT) not in sys.path:
     sys.path.insert(0, str(_LAB_ROOT))
@@ -57,21 +57,21 @@ from strands.models.openai import OpenAIModel
 from tools import reset_state
 
 logging.basicConfig(level=logging.INFO)
-log = logging.getLogger("cs_agent_v1")
+log = logging.getLogger("cs_agent_first_cut")
 
 
 # Single shared agent across all requests (and all customers). `agent.messages`
 # is the conversation memory — survives across requests but leaks across
 # users. Rebuilt on /api/reset (and lazily on first request).
-_V1_AGENT: Agent | None = None
+_FIRST_CUT_AGENT: Agent | None = None
 _RUNS = RunStore()
 
 
-def _get_v1_agent() -> Agent:
-    global _V1_AGENT
-    if _V1_AGENT is None:
-        _V1_AGENT = build_agent()
-    return _V1_AGENT
+def _get_first_cut_agent() -> Agent:
+    global _FIRST_CUT_AGENT
+    if _FIRST_CUT_AGENT is None:
+        _FIRST_CUT_AGENT = build_agent()
+    return _FIRST_CUT_AGENT
 
 
 # ---------------------------------------------------------------------------
@@ -301,7 +301,7 @@ async def _run_agent_stream(agent: Agent, prompt: str, *, run_state):
             "event": "context_iteration",
             "data": json.dumps(
                 {
-                    "run_id": run_id,
+                    "run_id": run_state.run_id,
                     "summary": f"Actual context sent to model call {emitted_contexts}",
                     "model_call": emitted_contexts,
                     **snapshot,
@@ -337,12 +337,12 @@ async def _run_agent_stream(agent: Agent, prompt: str, *, run_state):
 
 class RunRequest(BaseModel):
     prompt: str
-    customer_id: str  # Accepted for parity with v2's API; v1 does not bind
+    customer_id: str  # Accepted for parity with engineered's API; first-cut does not bind
     #                 — the LLM picks whatever ID the user mentions in the
     #                 prompt. customer_id here is unused server-side, so a
     #                 prompt-injection attack on tenancy actually works.
     model: str | None = None  # Per-request override; falls back to MODEL_ID.
-    # Per-request planner toggle. v1 has no skills loader, so the planner
+    # Per-request planner toggle. first-cut has no skills loader, so the planner
     # always runs with `skills_enabled=False`. Per-request, no rebuild
     # needed — the planner is a separate LLM call, not part of agent build.
     planner_enabled: bool | None = None
@@ -350,7 +350,7 @@ class RunRequest(BaseModel):
     tool_budget: int | None = None
 
 
-app = FastAPI(title="cs_agent_v1", version="0.1.0")
+app = FastAPI(title="cs_agent_first_cut", version="0.1.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -366,7 +366,7 @@ app.add_middleware(
 
 @app.get("/health")
 def health() -> dict[str, Any]:
-    return {"status": "ok", "agent": "cs_agent_v1", "agent_id": AGENT_ID}
+    return {"status": "ok", "agent": "cs_agent_first_cut", "agent_id": AGENT_ID}
 
 
 @app.get("/api/tools")
@@ -374,7 +374,7 @@ def tools_catalog() -> dict[str, Any]:
     """List the tools this agent has, with descriptions and input schemas.
     Tools don't change between requests, so the UI fetches this once per
     panel and renders a drawer next to the conversation."""
-    agent = _get_v1_agent()
+    agent = _get_first_cut_agent()
     return {"tools": agent.tool_registry.get_all_tool_specs()}
 
 
@@ -384,7 +384,7 @@ async def run(req: RunRequest):
     # memory. Mutating `agent.model` applies the per-request model choice
     # without rebuilding (which would wipe the message list). The shared
     # instance is what makes memory leak across customers — the lab's point.
-    agent = _get_v1_agent()
+    agent = _get_first_cut_agent()
     run_state = _RUNS.start(
         run_id=req.run_id,
         customer_id=req.customer_id,
@@ -398,8 +398,8 @@ async def run(req: RunRequest):
     # one file to see how customer_id ends up in the LLM-visible message.
     framed_prompt = frame_prompt(req.customer_id, req.prompt)
 
-    # Planning layer: same module as v2 (../planner.py at the lab root),
-    # called the same way. v1 has no skills loader, so we always pass
+    # Planning layer: same module as engineered (../planner.py at the lab root),
+    # called the same way. first-cut has no skills loader, so we always pass
     # `skills_enabled=False` — the planner is told skills aren't an
     # option here and won't suggest any.
     plan = ""
@@ -532,11 +532,11 @@ async def run(req: RunRequest):
 def reset() -> dict[str, Any]:
     """Reset this agent's mock data and drop the shared agent instance so
     its `agent.messages` (conversation memory) is wiped on next request."""
-    global _V1_AGENT
-    _V1_AGENT = None
+    global _FIRST_CUT_AGENT
+    _FIRST_CUT_AGENT = None
     reset_state()
     _RUNS.clear()
-    return {"ok": True, "agent": "cs_agent_v1"}
+    return {"ok": True, "agent": "cs_agent_first_cut"}
 
 
 @app.get("/api/state/{run_id}")
@@ -558,15 +558,15 @@ class EndSessionRequest(BaseModel):
 
 @app.post("/api/end_session")
 def end_session(req: EndSessionRequest) -> dict[str, Any]:
-    """Simulate 'time has passed' for the §5 episodic-memory demo. v1 has a
+    """Simulate 'time has passed' for the §5 episodic-memory demo. first-cut has a
     single shared Agent across all callers (the leaky-memory footgun), so
     dropping it wipes conversation memory for EVERY customer in one shot —
-    which is itself a hint that the "scope" of memory was wrong. v1 also
+    which is itself a hint that the "scope" of memory was wrong. first-cut also
     has no episodic memory layer, so the next request starts genuinely
     cold. Mock backend state is untouched. The `customer_id` field is
-    accepted for parity with v2's API but ignored — there's only one
+    accepted for parity with engineered's API but ignored — there's only one
     shared agent here, not a per-customer cache."""
-    global _V1_AGENT
-    _V1_AGENT = None
-    _ = req.customer_id  # accepted for parity; v1's shared agent ignores it
-    return {"ok": True, "agent": "cs_agent_v1", "ended": "all"}
+    global _FIRST_CUT_AGENT
+    _FIRST_CUT_AGENT = None
+    _ = req.customer_id  # accepted for parity; first-cut's shared agent ignores it
+    return {"ok": True, "agent": "cs_agent_first_cut", "ended": "all"}

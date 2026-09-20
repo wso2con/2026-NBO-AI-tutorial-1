@@ -1,7 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
 import { Brain, ChevronRight, RotateCw } from "lucide-react";
-import ReactMarkdown from "react-markdown";
-import remarkBreaks from "remark-breaks";
 import {
   Collapsible,
   CollapsibleContent,
@@ -9,6 +7,7 @@ import {
 } from "@/components/ui/collapsible";
 import { cn } from "@/lib/utils";
 import { fetchMemory, type AgentMemory, type AgentService } from "@/lib/api";
+import { TextViewer } from "./TextViewer";
 
 interface Props {
   service: AgentService;
@@ -20,8 +19,8 @@ interface Props {
 }
 
 /**
- * Reads the v2 agent's episodic-memory file for the current customer and
- * renders it inline as markdown. Sits below the tools drawer in the v2
+ * Reads the engineered agent's episodic-memory file for the current customer and
+ * renders it inline as markdown. Sits below the tools drawer in the engineered
  * panel and is only mounted when the episodic-memory feature toggle is on.
  *
  * This is the "look inside the file" affordance for the §5 demo: the
@@ -93,7 +92,7 @@ export function MemoryDrawer({ service, customerId, refreshKey }: Props) {
         </button>
       </div>
       <CollapsibleContent className="overflow-hidden data-[state=open]:animate-accordion-down data-[state=closed]:animate-accordion-up">
-        <div className="scroll-thin max-h-72 overflow-y-auto border-t bg-muted/40 px-4 py-3 text-xs">
+        <div className="border-t bg-muted/40 px-3 py-2.5 text-xs">
           {error ? (
             <div className="text-destructive">{error}</div>
           ) : !exists ? (
@@ -103,11 +102,14 @@ export function MemoryDrawer({ service, customerId, refreshKey }: Props) {
               tool during a turn.
             </div>
           ) : (
-            <div className="prose prose-sm max-w-none leading-relaxed dark:prose-invert prose-p:my-2 prose-headings:my-2 prose-h1:text-sm prose-h2:text-xs prose-h2:uppercase prose-h2:tracking-wider prose-h2:text-muted-foreground prose-ul:my-1 prose-li:my-0">
-              <ReactMarkdown remarkPlugins={[remarkBreaks]}>
-                {memory!.content}
-              </ReactMarkdown>
-            </div>
+            /* A file the agent wrote for a human reader: rendered first,
+               with "raw" there for the audience that wants to see the
+               markdown the next turn will actually be fed. */
+            <TextViewer
+              text={memory!.content}
+              defaultView="rendered"
+              maxHeight="max-h-72"
+            />
           )}
         </div>
       </CollapsibleContent>

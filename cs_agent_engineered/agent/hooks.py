@@ -110,7 +110,7 @@ class RefundCapHook:
     server multiplies by the order's `total_usd` to get the dollar amount.
     The hook needs its own `CustomerSupportClient` instance to look up the
     order's total before it can decide whether the resulting amount blows
-    the cap. The harness and the v2 MCP subprocess each carry their own
+    the cap. The harness and the engineered MCP subprocess each carry their own
     client; both read the same per-agent disk dir (`mocks/data/<agent_id>/`)
     so they see the same world.
     """
@@ -145,8 +145,8 @@ class RefundCapHook:
         if amount <= self.refund_cap_usd:
             return
         # cancel_tool accepts a string that becomes an error tool-result body.
-        # We hand back JSON matching the v2 server's 403 shape so run.py's
-        # trace renderer recognises it and shows a clean red error.
+        # We hand back JSON matching the engineered server's 403 shape so the
+        # SSE trace renderer recognises it and shows a clean red error.
         event.cancel_tool = json.dumps(
             {
                 "error": "policy_violation",

@@ -1,4 +1,4 @@
-"""Tools for cs_agent_v1 — REALISTIC bad design.
+"""Tools for cs_agent_first_cut — REALISTIC bad design.
 
 Every tool here is shaped like real internal-API code: clean function
 signatures, typed parameters, working error paths. But the API was
@@ -30,7 +30,7 @@ from strands import tool
 from config import AGENT_ID, REFUND_CAP_USD
 from mocks.client import CustomerSupportClient
 
-# v1 has no scoped identity — no AgentIdentity dataclass, no per-call
+# first-cut has no scoped identity — no AgentIdentity dataclass, no per-call
 # principal, no harness-enforced cap. The agent_id is a string the
 # write tools stamp onto ledger entries, and the cap is a number
 # checked inline below. Both come from `config.py` (env-overridable).
@@ -63,9 +63,9 @@ def get_order(order_id: str) -> dict:
         # legacy order service returns for ANY failure — missing record,
         # database hiccup, permissions issue, malformed request. The agent
         # has no signal what actually went wrong. Recovery becomes
-        # guesswork: retry? ask the user? escalate? v2's MCP server tells
+        # guesswork: retry? ask the user? escalate? engineered's MCP server tells
         # the agent specifically `{"error": "order_not_found", "order_id":
-        # "..."}` and the agent acts on it; v1 leaves the agent stuck.
+        # "..."}` and the agent acts on it; first-cut leaves the agent stuck.
         return {"error": "internal server error"}
     return o.model_dump()
 
@@ -151,7 +151,7 @@ def modify_order(
 # attribute-style keys (`@xmlns`, `@xsi:type`), with a CDATA-wrapped
 # `ReasonText`, plus deprecation hints, audit pointers, replica lag, ACLs,
 # legacy priority codes. The fields the agent actually wants are buried
-# four levels deep behind ~10 noise keys. v2's typed MCP versions return
+# four levels deep behind ~10 noise keys. engineered's typed MCP versions return
 # the same data as a flat list with action-named fields.
 
 
@@ -218,14 +218,14 @@ def get_customer_verified(customer_id: str) -> bool:
 # Not isolated to any single anti-pattern but exhibit AP4 (bad errors)
 # in their own ways.
 #
-# `search_kb` delegates to the same `policies.search.search` function v2's
+# `search_kb` delegates to the same `policies.search.search` function engineered's
 # `search_policy_kb` calls — identical corpus, identical scoring, identical
 # return shape. The §6 demo (Plan before commit) is deliberately not about
-# retrieval quality differences. What differs between v1 and v2 is the
-# framing: v1 exposes the search behind a one-line docstring and has no
+# retrieval quality differences. What differs between first-cut and engineered is the
+# framing: first-cut exposes the search behind a one-line docstring and has no
 # skill / procedure pushing the agent to consult it before write actions.
-# Same evidence on the table; v2's harness makes "consult policy first"
-# the path of least resistance — v1's says the same words in the prompt
+# Same evidence on the table; engineered's harness makes "consult policy first"
+# the path of least resistance — first-cut's says the same words in the prompt
 # and the LLM still commits directly.
 
 

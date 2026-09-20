@@ -15,7 +15,7 @@ interface Props {
   toolsLoading: boolean;
   toolsError: string | null;
   onToggleEnabled: () => void;
-  // v2-only: feature toggles. Undefined for v1 — the row doesn't render.
+  // engineered-only: feature toggles. Undefined for first-cut — the row doesn't render.
   skillsEnabled?: boolean;
   episodicEnabled?: boolean;
   // `plannerEnabled` is per-request (no agent rebuild), so it can flip
@@ -27,7 +27,7 @@ interface Props {
   // Disables the feature toggles while a chat is in-flight (same as the
   // top-bar reset button).
   featuresDisabled?: boolean;
-  // v2-only: identifies whose memory file to read, and a bump counter the
+  // engineered-only: identifies whose memory file to read, and a bump counter the
   // parent increments after events that may have modified the file. Both
   // are required when `episodicEnabled` is true; otherwise unused.
   customerId?: string;
@@ -64,10 +64,10 @@ export function AgentPanel({
   const isError = status === "error";
   const isComplete = displayStatus === "complete";
 
-  // v1 = amber accent, v2 = emerald. Used for the top stripe and the
+  // first-cut = amber accent, engineered = emerald. Used for the top stripe and the
   // status dot when the panel is idle / running so the columns are visually
   // distinct at a glance — even before the audience reads the labels.
-  const accentClass = service.variant === "v1" ? "bg-v1" : "bg-v2";
+  const accentClass = service.variant === "first_cut" ? "bg-first-cut" : "bg-engineered";
   const dotColor = isError ? "bg-destructive" : accentClass;
 
   const statusVariant: "secondary" | "destructive" | "success" = isError
@@ -83,7 +83,7 @@ export function AgentPanel({
         !state.enabled && "opacity-50",
       )}
     >
-      {/* v1/v2 accent stripe */}
+      {/* first-cut/engineered accent stripe */}
       <div className={cn("h-[3px] w-full shrink-0", accentClass)} aria-hidden />
 
       {/* Header */}
@@ -113,7 +113,7 @@ export function AgentPanel({
               {displayStatus}
             </Badge>
           )}
-          {/* v2-only feature toggles. Flipping either restarts the v2 session
+          {/* engineered-only feature toggles. Flipping either restarts the engineered session
               (agent rebuild — skills/episodic memory are baked at build time).
               App.tsx confirms the destruction before calling the handler. */}
           {onToggleSkills && (
@@ -165,9 +165,9 @@ export function AgentPanel({
       </div>
       <Separator />
 
-      {service.variant === "v2" && (
-        <div className="flex flex-wrap items-center gap-1 border-b bg-v2/5 px-4 py-2 text-[10px] uppercase tracking-wide text-muted-foreground">
-          <span className="mr-1 font-semibold text-v2">harness</span>
+      {service.variant === "engineered" && (
+        <div className="flex flex-wrap items-center gap-1 border-b bg-engineered/5 px-4 py-2 text-[10px] uppercase tracking-wide text-muted-foreground">
+          <span className="mr-1 font-semibold text-engineered">harness</span>
           <Badge variant="outline">explicit run state</Badge>
           <Badge variant="outline">progress control</Badge>
           <Badge variant="outline">safe recovery</Badge>
@@ -181,7 +181,7 @@ export function AgentPanel({
         error={toolsError ?? undefined}
       />
 
-      {/* Episodic-memory file viewer — only when the v2 feature is on.
+      {/* Episodic-memory file viewer — only when the engineered feature is on.
           Lets the audience inspect what the agent committed to disk
           across the next-session boundary. */}
       {episodicEnabled && customerId && (

@@ -7,7 +7,7 @@ state:
 
 What it touches:
 
-- cs_agent_v2/memory/episodic/customer_*.md  ← deleted, EXCEPT
+- cs_agent_engineered/memory/episodic/customer_*.md  ← deleted, EXCEPT
                                                 customer_cust_002.md (Bob's
                                                 seeded memory, committed to
                                                 git for the §3 demo)
@@ -28,20 +28,20 @@ To clear the in-process state, either:
 If Bob's memory file got modified by `compact_memory` during a demo,
 restore it via:
 
-    git restore cs_agent_v2/memory/episodic/customer_cust_002.md
+    git restore cs_agent_engineered/memory/episodic/customer_cust_002.md
 """
 
 from pathlib import Path
 
 ROOT = Path(__file__).parent
-EPISODIC_DIR = ROOT / "cs_agent_v2" / "memory" / "episodic"
+EPISODIC_DIR = ROOT / "cs_agent_engineered" / "memory" / "episodic"
 
 # Bob's memory is the one seeded file we keep — committed to git.
 KEEP_MEMORY_FILES = {"customer_cust_002.md"}
 
 
 def reset_memory() -> list[str]:
-    """Remove non-seeded customer memory files under cs_agent_v2/memory/episodic/."""
+    """Remove non-seeded customer memory files under cs_agent_engineered/memory/episodic/."""
     if not EPISODIC_DIR.exists():
         return []
     removed = []

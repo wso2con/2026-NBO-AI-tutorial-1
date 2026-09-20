@@ -1,7 +1,7 @@
 """CustomerSupportClient — file-backed mock backend, isolated per agent.
 
 Each agent gets its own data directory under `mocks/data/<agent_id>/`.
-v1 and v2 never share runtime state — one agent's refunds, cancellations,
+first-cut and engineered never share runtime state — one agent's refunds, cancellations,
 or address updates are completely invisible to the other. This is what
 makes the side-by-side demo a real comparison: each agent acts on the
 world it created, not a world contaminated by the other agent's writes.
@@ -11,7 +11,7 @@ shared: both agents start from the same fixtures. On first instantiation
 (or after `reset()`), the agent's own data files are repopulated from
 those shared seeds.
 
-Why file-backed and not pure in-memory: v2's MCP subprocesses are
+Why file-backed and not pure in-memory: engineered's MCP subprocesses are
 re-spawned whenever the cached Agent is dropped (e.g. on /api/end_session
 during the §5 episodic-memory demo). An in-memory client would lose
 every mutation on that respawn — refunds would silently disappear,
@@ -25,7 +25,7 @@ is refreshed from disk on every mutation made by THIS instance.
 
 To reset state: call `reset()` (or `reset_data_files(agent_id)` without
 an instance) — wipes only that agent's data files and reseeds them from
-the shared canonical seeds. v1's /api/reset and v2's /api/reset each
+the shared canonical seeds. first-cut's /api/reset and engineered's /api/reset each
 reset their own agent's data; the web UI's "Reset" button hits both
 endpoints so the lab returns to a known starting state across the board.
 """
@@ -71,8 +71,8 @@ def _seed_if_missing(data_dir: Path) -> None:
 
 def reset_data_files(agent_id: str) -> None:
     """Delete the named agent's data files and reseed from the shared seeds.
-    Used by /api/reset on both agents (v1 calls it via `_client.reset()`;
-    v2 calls it directly from main.py so the next-spawned MCP subprocess
+    Used by /api/reset on both agents (first-cut calls it via `_client.reset()`;
+    engineered calls it directly from main.py so the next-spawned MCP subprocess
     re-reads clean state). Only the named agent's data is touched — the
     sibling agent's state is left alone."""
     data_dir = _agent_data_dir(agent_id)
@@ -136,9 +136,9 @@ class CustomerSupportClient:
         DB id, shard key, audit pointer, lifecycle / segment flags,
         replica lag, etag, legacy duplicate fields, opt-in history.
 
-        Tools that surface this raw (e.g. v1's `get_customer_full`) hand
+        Tools that surface this raw (e.g. first-cut's `get_customer_full`) hand
         the agent ~15 noise fields it has to scan past. Tools that project
-        (v2's `lookup_customer`) only return what the agent needs.
+        (engineered's `lookup_customer`) only return what the agent needs.
         """
         raw = self._customers.get(customer_id)
         if raw is None:
@@ -349,7 +349,7 @@ class CustomerSupportClient:
         """SOAP-era refund history wrapper. Same underlying data as
         `get_refund_history`, but wrapped in the kind of XML-attribute-styled,
         deprecation-warning-laden envelope a legacy SOAP-to-JSON adapter
-        produces. v1's `get_refund_history` tool surfaces this raw so the
+        produces. first-cut's `get_refund_history` tool surfaces this raw so the
         agent has to scan past the noise to find the four fields that
         actually matter (ref, order_id, amount_usd, reason).
         """
@@ -398,7 +398,7 @@ class CustomerSupportClient:
     def get_open_tickets_legacy(self, customer_id: str) -> dict:
         """SOAP-era ticket-list wrapper. Same data as `get_open_tickets`,
         but with attribute-styled keys, ACLs, legacy priority codes, and
-        a deprecation hint. v1 surfaces this raw."""
+        a deprecation hint. first-cut surfaces this raw."""
         tickets = self.get_open_tickets(customer_id)
         priority_code = {"low": 4, "normal": 3, "high": 2, "urgent": 1}
         return {

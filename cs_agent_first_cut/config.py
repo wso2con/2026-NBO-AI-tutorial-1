@@ -1,20 +1,20 @@
-"""Runtime configuration for cs_agent_v1.
+"""Runtime configuration for cs_agent_first_cut.
 
 Environment variables with sensible defaults — the classic first-cut
 configuration shape. Quick to ship, works, but scattered: the model
 and cap are here, the prompt is in `agent.py`, the tool list is in
 `tools.py`. No single source of truth for "what does this agent do?"
 
-cs_agent_v2 collapses all of this into one declarative
+cs_agent_engineered collapses all of this into one declarative
 `agent-profile.yaml` that the harness reads at startup
-(see `cs_agent_v2/agent-profile.yaml`).
+(see `cs_agent_engineered/agent-profile.yaml`).
 """
 
 from __future__ import annotations
 
 import os
 
-AGENT_ID = os.environ.get("AGENT_ID", "cs-agent-v1")
+AGENT_ID = os.environ.get("AGENT_ID", "cs-agent-first-cut")
 AGENT_NAME = os.environ.get("AGENT_NAME", "Customer Support Agent")
 MODEL_ID = os.environ.get("AGENT_MODEL", "gpt-5.4-mini")
 REFUND_CAP_USD = float(os.environ.get("REFUND_CAP_USD", "200"))
