@@ -52,7 +52,7 @@ from policy_evaluator import (
     aggregate_verdict,
     evaluate_turn,
 )
-from mocks.client import arm_fault
+from mocks.client import arm_fault, disarm_fault
 from run_control import BUDGET_STOP_MARKER
 from loop_state import (
     RunStore,
@@ -317,8 +317,17 @@ async def _run_agent_stream(
     # emitted it before stream_async, the drawer in the UI would show the
     # bare prompt without the "Available skills" catalog.
     system_prompt_emitted = False
-    agent._context_trace_snapshots = []
-    emitted_contexts = 0
+    # A confirmation resume is the same turn continuing, which is why
+    # `RunStore.start(continue_turn=True)` carries `model_call_usage` across the
+    # pause. Clearing the snapshots here would restart the context chart's
+    # numbering at 1 while the usage counter kept climbing, and the console
+    # draws both halves of that one chart from these numbers. Keep the
+    # snapshots and pick up counting where the pre-pause half stopped.
+    # A budget-grant continuation is a NEW turn and arrives with
+    # `resuming=False`, so it still gets a clean chart.
+    if not resuming:
+        agent._context_trace_snapshots = []
+    emitted_contexts = len(getattr(agent, "_context_trace_snapshots", []))
     # Compactions are appended by the context pipeline from inside the event
     # loop (see context_compaction.py), so they are drained alongside the
     # context snapshots rather than emitted from the hook itself.
@@ -512,6 +521,10 @@ async def _run_agent_stream(
     while emitted_contexts < len(snapshots):
         snapshot = snapshots[emitted_contexts]
         emitted_contexts += 1
+        # Same bookkeeping the in-stream drain does. A snapshot that only
+        # surfaces after the stream closes is still an iteration; without this
+        # `iteration_count` undercounts the `context_iteration` events.
+        record_iteration(run_state)
         yield {
             "event": "context_iteration",
             "data": json.dumps(
@@ -719,8 +732,14 @@ async def run(req: RunRequest):
         planner_enabled=req.planner_enabled,
     )
     agent = get_agent(req.customer_id, effective_profile)
+    # The fault is one-shot and disk-backed, so it outlives the turn that armed
+    # it unless the refund tool consumes it. Disarm whenever the toggle is off
+    # so a primed fault can never surface on a later turn the console shows as
+    # fault-free.
     if req.refund_service_timeout:
         arm_fault(PROFILE.agent_id, "refund_service_timeout")
+    else:
+        disarm_fault(PROFILE.agent_id, "refund_service_timeout")
 
     # Is this message the answer to a confirmation the agent is parked on?
     # If so it is not a new turn at all: it unblocks the tool call that is

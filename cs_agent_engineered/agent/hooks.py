@@ -199,6 +199,11 @@ class RefundEvidenceHook:
         tool_use = event.tool_use
         if tool_use.get("name") != "issue_refund":
             return
+        if event.cancel_tool:
+            # The cap hook runs first and already rejected this call. Both
+            # hooks write the same field, so continuing here would replace its
+            # 403 with our 422 and report the wrong reason to the customer.
+            return
         inputs = tool_use.get("input") or {}
         reason_code = inputs.get("reason_code")
         order_id = inputs.get("order_id")
@@ -290,6 +295,14 @@ _NEGATIVE = re.compile(
     re.IGNORECASE,
 )
 
+# "no problem", "no rush", "no worries" — the word "no" doing the opposite of
+# refusing. Stripped before the negative test so a cheerful yes is not read as
+# a denial. Only these fixed pairings; anything else keeps its "no".
+_POLITE_FILLER = re.compile(
+    r"\bno\s+(problem|worries|rush|hurry|trouble)\b",
+    re.IGNORECASE,
+)
+
 
 def is_affirmative(text: str | None) -> bool:
     """Did the human say yes?
@@ -299,9 +312,15 @@ def is_affirmative(text: str | None) -> bool:
     approval the LLM grants itself is not an approval. A negative anywhere in
     the reply wins ("yes I want a refund, but no, don't cancel it" is a no),
     and anything that is neither reads as "not approved".
+
+    Failing closed is the right answer for an *unclear* reply, not for an
+    obviously enthusiastic one, so polite filler is removed first: "ok, no
+    problem" is a yes. A real refusal alongside the filler still wins, because
+    the negative test runs on what is left.
     """
     if not text:
         return False
+    text = _POLITE_FILLER.sub(" ", text)
     if _NEGATIVE.search(text):
         return False
     return bool(_AFFIRMATIVE.search(text))

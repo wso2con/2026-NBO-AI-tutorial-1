@@ -460,10 +460,17 @@ export default function App() {
     const svc = variant === "engineered" ? AGENTS.engineered : AGENTS.first_cut;
 
     if (isBudget && !approved) {
-      void stopPausedTask(svc, {
+      // Always the engineered service: `/api/budget_stop` exists only there.
+      // first-cut has no budget pause to clear — its guard cancels the turn
+      // outright — so routing this by variant would POST to a 404.
+      void stopPausedTask(AGENTS.engineered, {
         customer_id: customerId,
         run_id: pause.run_id,
-      }).catch(() => undefined);
+      }).catch((err) => {
+        // The pause is already cleared in the UI. Say so in the console rather
+        // than dropping it, so a stuck server-side pause is debuggable.
+        console.error("failed to clear the paused task", err);
+      });
       return;
     }
     if (anyRunning) return;

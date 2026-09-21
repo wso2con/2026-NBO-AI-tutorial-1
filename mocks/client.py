@@ -128,6 +128,24 @@ def arm_fault(agent_id: str, fault: str) -> None:
     _write_json(path, state)
 
 
+def disarm_fault(agent_id: str, fault: str) -> None:
+    """Clear a one-shot fault the named agent never got round to firing.
+
+    `consume_fault` only runs inside the tool the fault targets, so a turn that
+    was armed but never reached that tool leaves the flag primed on disk and it
+    goes off on some later, unrelated turn. The console has already reset its
+    own toggle by then, so the fault would appear to come from nowhere. Every
+    run disarms what it did not arm."""
+    path = _agent_data_dir(agent_id) / FAULTS_FILE
+    if not path.exists():
+        return
+    state = json.loads(path.read_text())
+    if not state.get(fault):
+        return
+    state[fault] = False
+    _write_json(path, state)
+
+
 def consume_fault(agent_id: str, fault: str) -> bool:
     """Consume a one-shot fault, returning whether it had been armed."""
     path = _agent_data_dir(agent_id) / FAULTS_FILE

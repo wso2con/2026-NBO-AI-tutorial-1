@@ -82,8 +82,10 @@ test:
 # reset.py restores mocks/data/ from seeds and clears non-seeded memory.
 # The web UI's "reset" button hits each service's /api/reset; use this
 # target when the services aren't running (e.g. between rehearsals).
+# Run from the engineered venv: reset.py imports mocks.client, which pulls in
+# pydantic, and the system python3 has no reason to have it.
 reset:
-	python3 reset.py
+	cs_agent_engineered/.venv/bin/python reset.py
 
 clean:
 	rm -rf cs_agent_first_cut/.venv cs_agent_engineered/.venv web/node_modules

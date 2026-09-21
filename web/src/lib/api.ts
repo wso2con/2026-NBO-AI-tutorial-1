@@ -87,11 +87,14 @@ export async function stopPausedTask(
   svc: AgentService,
   args: { customer_id: string; run_id?: string },
 ): Promise<void> {
-  await fetch(`${svc.baseUrl}/api/budget_stop`, {
+  const response = await fetch(`${svc.baseUrl}/api/budget_stop`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(args),
   });
+  if (!response.ok) {
+    throw new Error(`${svc.variant} /api/budget_stop returned ${response.status}`);
+  }
 }
 
 /** POST /api/run and stream SSE events through `onEvent`. */

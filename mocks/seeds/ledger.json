@@ -7,18 +7,18 @@
     "amount_usd": null,
     "reason": "Investigate batch QC — second damaged delivery to Lindenstraße, Munich in 6 months. Replacement pour-over dripper set promised by ~2026-09-15.",
     "status": "open",
-    "actor_agent_id": "cs-agent-v0",
+    "actor_agent_id": "cs-agent-legacy",
     "timestamp": "2026-09-10T10:10:00Z"
   },
   {
     "kind": "refund",
-    "ref": "refund_0002",
+    "ref": "refund_0001",
     "order_id": "1241",
     "customer_id": "cust_001",
     "amount_usd": 10.0,
     "refund_percentage": 0.1,
     "reason": "shipping_delay_credit",
-    "actor_agent_id": "cs-agent-v0",
+    "actor_agent_id": "cs-agent-legacy",
     "timestamp": "2026-09-21T09:00:00Z"
   }
 ]

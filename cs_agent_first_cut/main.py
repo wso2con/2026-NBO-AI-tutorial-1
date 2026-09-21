@@ -50,7 +50,7 @@ from policy_evaluator import (
     aggregate_verdict,
     evaluate_turn,
 )
-from mocks.client import arm_fault
+from mocks.client import arm_fault, disarm_fault
 from loop_state import (
     RunStore,
     add_auxiliary,
@@ -313,6 +313,10 @@ async def _run_agent_stream(agent: Agent, prompt: str, *, run_state):
     while emitted_contexts < len(snapshots):
         snapshot = snapshots[emitted_contexts]
         emitted_contexts += 1
+        # Same bookkeeping the in-stream drain does. A snapshot that only
+        # surfaces after the stream closes is still an iteration; without this
+        # `iteration_count` undercounts the `context_iteration` events.
+        record_iteration(run_state)
         yield {
             "event": "context_iteration",
             "data": json.dumps(
@@ -411,8 +415,14 @@ async def run(req: RunRequest):
     # without rebuilding (which would wipe the message list). The shared
     # instance is what makes memory leak across customers — the lab's point.
     agent = _get_first_cut_agent()
+    # The fault is one-shot and disk-backed, so it outlives the turn that armed
+    # it unless the refund tool consumes it. Disarm whenever the toggle is off
+    # so a primed fault can never surface on a later turn the console shows as
+    # fault-free.
     if req.refund_service_timeout:
         arm_fault(AGENT_ID, "refund_service_timeout")
+    else:
+        disarm_fault(AGENT_ID, "refund_service_timeout")
     run_state = _RUNS.start(
         run_id=req.run_id,
         customer_id=req.customer_id,
