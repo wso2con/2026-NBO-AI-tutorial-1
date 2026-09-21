@@ -33,7 +33,7 @@ tool. A shipment already moving requires a carrier intercept handled by a
 human; escalate at priority `normal` and state that the intercept is requested,
 not completed. A delivered order the customer wants to undo is a return and is
 governed by `return_window`; a delivered order that arrived broken is governed
-by `damaged_item`.
+by `refund_damaged_item`.
 
 ## Resolution sequence
 

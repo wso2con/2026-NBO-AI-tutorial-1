@@ -13,7 +13,7 @@ The category policy must be applied first.
 
 | Category | Entitlement | Conditions |
 | --- | ---: | --- |
-| Damaged on arrival | 100% | Required evidence under `damaged_item` |
+| Damaged on arrival | 100% | Required evidence under `refund_damaged_item` |
 | Cancellation before shipment | 90% | Order is `placed` or `preparing` |
 | Shipping delay | 10% store credit | Delivery is more than 3 business days late |
 | Return | 100% | Eligible under `return_window` |

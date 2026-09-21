@@ -45,6 +45,13 @@ Return one concise JSON object with exactly this shape:
   "applicable_policies": [
     {"id": "policy id", "title": "policy title", "applies_because": "short reason"}
   ],
+  "entitlement": {
+    "category": "the entitlement category being applied",
+    "category_percentage": "the percentage that category allows",
+    "offsets": ["each prior refund or credit on this order that reduces it"],
+    "net": "what is owed after offsets, as a percentage and as an amount when the total is known",
+    "authority": "whether the net is inside the agent's cap, or must be escalated"
+  },
   "conditions": ["conditions already satisfied or still required"],
   "required_steps": ["ordered, concrete next steps for the operational agent"],
   "prohibited_actions": ["actions the agent must not take in this case"],
@@ -54,8 +61,11 @@ Return one concise JSON object with exactly this shape:
 
 Rules:
 - Apply only provisions relevant to the current request and questions. Do not recap entire policies.
+- A candidate carrying `referenced_by` is here because another candidate delegates to it by name. If the delegating provision applies, that document is part of the answer, not background.
+- `entitlement` is required whenever the case moves money, and null otherwise. Work the arithmetic out: name the category percentage, subtract every prior refund or credit recorded against the same order, and state the net. A brief that hands the agent a percentage and leaves it to do the subtraction has not answered the question it was asked.
 - Preserve exact thresholds, percentages, evidence requirements, ordering rules, escalation priority, and exceptions.
 - Put required_steps in execution order. Say explicitly when the agent must stop and ask, wait, or escalate.
+- Do not spend a step or a condition on case hygiene the agent performs regardless of policy, such as confirming which order the customer means or reading the order record. Begin at the first point the policy actually governs. Keep an ordering rule only where the policy imposes it, such as cancelling before refunding.
 - Distinguish evidence the customer says exists from evidence recorded by an operational tool.
 - Never claim an operational action has happened; you only interpret policy.
 - If the retrieved documents do not answer a question, use insufficient_policy or needs_human_review instead of guessing.
@@ -67,15 +77,25 @@ mcp = FastMCP("policy-advisor")
 
 
 def _candidate_block(candidates: list[dict]) -> str:
-    return "\n\n".join(
-        (
+    """Render candidates, marking the ones pulled in by cross-reference.
+
+    `referenced_by` tells the specialist that this document is here because
+    another candidate delegates to it, not because the customer's wording
+    matched it. That is the difference between a document to apply and a
+    document to ignore.
+    """
+
+    def render(item: dict) -> str:
+        referenced_by = item.get("referenced_by")
+        via = f' referenced_by="{referenced_by}"' if referenced_by else ""
+        return (
             f'<policy id="{item.get("id", "unknown")}" '
-            f'title="{item.get("title", "Untitled")}">\n'
+            f'title="{item.get("title", "Untitled")}"{via}>\n'
             f'{item.get("rule", "")}\n'
             "</policy>"
         )
-        for item in candidates
-    )
+
+    return "\n\n".join(render(item) for item in candidates)
 
 
 def _normalize(payload: object, candidates: list[dict]) -> dict:
@@ -119,9 +139,28 @@ def _normalize(payload: object, candidates: list[dict]) -> dict:
             if str(value).strip()
         ]
 
+    entitlement = payload.get("entitlement")
+    if isinstance(entitlement, dict):
+        entitlement = {
+            "category": " ".join(str(entitlement.get("category", "")).split())[:120],
+            "category_percentage": " ".join(
+                str(entitlement.get("category_percentage", "")).split()
+            )[:80],
+            "offsets": [
+                " ".join(str(value).split())[:160]
+                for value in (entitlement.get("offsets") or [])[:6]
+                if str(value).strip()
+            ],
+            "net": " ".join(str(entitlement.get("net", "")).split())[:160],
+            "authority": " ".join(str(entitlement.get("authority", "")).split())[:160],
+        }
+    else:
+        entitlement = None
+
     return {
         "decision": decision,
         "applicable_policies": applicable,
+        "entitlement": entitlement,
         "conditions": short_list("conditions"),
         "required_steps": short_list("required_steps"),
         "prohibited_actions": short_list("prohibited_actions"),
@@ -166,11 +205,18 @@ def check_policy(customer_request: str, policy_questions: list[str]) -> dict:
         }
 
     query = " ".join([clean_request, *clean_questions])
-    candidates = search_policies(query, top_k=3)
+    # Scored hits plus the documents those hits delegate to by name. The
+    # expansion is what puts `refund_calculation` in front of the specialist
+    # on a cancellation question: the customer asked about cancelling, so
+    # nothing in their words ranks the document holding the percentages, but
+    # `cancellation` names it outright. This candidate set never reaches the
+    # main agent — the brief does — so widening it costs context nowhere.
+    candidates = search_policies(query, top_k=3, follow_references=True)
     if candidates and candidates[0].get("id") == "no_match":
         return {
             "decision": "insufficient_policy",
             "applicable_policies": [],
+            "entitlement": None,
             "conditions": [],
             "required_steps": [
                 "Escalate to a human because the policy knowledge base did not match this case."
