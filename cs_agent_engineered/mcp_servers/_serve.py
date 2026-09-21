@@ -90,6 +90,15 @@ def build_parser(server_key: str) -> argparse.ArgumentParser:
         action="store_true",
         help="answer with plain JSON instead of an SSE stream (simpler for curl and basic clients)",
     )
+    parser.add_argument(
+        "--log-level",
+        default=_env_default("MCP_LOG_LEVEL", "warning"),
+        choices=("critical", "error", "warning", "info", "debug", "trace"),
+        help="uvicorn log level (default: warning). Use `info` to see the access log — "
+        "which client called what, and how each request was answered. Worth reaching "
+        "for whenever a client misbehaves, since at the default level a failing request "
+        "leaves no trace and only uvicorn's own warnings appear.",
+    )
     return parser
 
 
@@ -195,7 +204,7 @@ def serve(mcp, server_key: str, argv: list[str] | None = None) -> int:
     import uvicorn
 
     try:
-        uvicorn.run(app, host=args.host, port=args.port, log_level="warning")
+        uvicorn.run(app, host=args.host, port=args.port, log_level=args.log_level)
     except KeyboardInterrupt:
         print("\nstopped.")
     return 0
