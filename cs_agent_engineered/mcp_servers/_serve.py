@@ -27,13 +27,107 @@ from __future__ import annotations
 
 import argparse
 import os
+import json
+import logging
 import socket
 import sys
+import time
 
 DEFAULT_PORT = 8765
 
+_log = logging.getLogger("mcp_servers.trace")
+
 # 8001 and 8002 are the two FastAPI services (see the Makefile) and 8000 is
 # FastMCP's own default, so the servers start clear of all three.
+
+
+def _clip(text: str, limit: int) -> str:
+    text = " ".join(str(text).split())
+    return text if len(text) <= limit else text[: limit - 1] + "…"
+
+
+def _fmt_args(arguments: object) -> str:
+    if not isinstance(arguments, dict):
+        return _clip(repr(arguments), 200)
+    return ", ".join(f"{k}={_clip(json.dumps(v, default=str), 60)}" for k, v in arguments.items())
+
+
+def _fmt_result(result: object) -> str:
+    """Summarize a tool result, leading with the error when there is one.
+
+    These servers return failures as ordinary dicts rather than raising, so a
+    trace that only said "returned dict" would hide the single most useful
+    fact about the call. Pull `error` to the front instead.
+    """
+    payload = result
+    # By the time a call reaches here it has usually been converted, so the
+    # dict the tool returned is wrapped: a (content, structured) pair, or a
+    # list of content blocks whose text is the JSON. Unwrap both, or the
+    # trace degrades into a repr of the transport's own plumbing.
+    if isinstance(payload, tuple) and len(payload) == 2:
+        payload = payload[1] if isinstance(payload[1], dict) else payload[0]
+    if isinstance(payload, (list, tuple)):
+        texts = [getattr(block, "text", None) for block in payload]
+        joined = "".join(text for text in texts if text)
+        if joined:
+            try:
+                payload = json.loads(joined)
+            except ValueError:
+                payload = joined
+    if isinstance(payload, dict):
+        if "error" in payload:
+            detail = payload.get("detail") or payload.get("remediation") or ""
+            code = f" {payload['code']}" if "code" in payload else ""
+            return _clip(f"ERROR {payload['error']}{code} {detail}".strip(), 220)
+        return _clip(json.dumps(payload, default=str), 220)
+    return _clip(repr(payload), 220)
+
+
+def trace_tool_calls(mcp) -> None:
+    """Log every tool call: name, arguments, outcome and duration.
+
+    Wraps the tool manager, which is the one chokepoint every invocation
+    passes through, so no tool can be added later and quietly escape the
+    trace.
+
+    Everything goes to stderr, via logging's default handler. That is not
+    incidental: under stdio the protocol itself owns stdout, and a single
+    print() there would corrupt the stream, so tracing must never be the
+    thing that breaks the transport it is meant to debug.
+    """
+    manager = mcp._tool_manager
+    original = manager.call_tool
+
+    async def traced(name, arguments, context=None, convert_result=False):
+        _log.debug("→ %s(%s)", name, _fmt_args(arguments))
+        started = time.perf_counter()
+        try:
+            result = await original(name, arguments, context=context, convert_result=convert_result)
+        except Exception as exc:
+            elapsed = (time.perf_counter() - started) * 1000
+            _log.debug("← %s raised %s: %s [%.0fms]", name, type(exc).__name__, exc, elapsed)
+            raise
+        elapsed = (time.perf_counter() - started) * 1000
+        _log.debug("← %s %s [%.0fms]", name, _fmt_result(result), elapsed)
+        return result
+
+    manager.call_tool = traced
+
+
+def enable_debug_logging() -> None:
+    """Turn on tool tracing and the MCP framework's own debug output.
+
+    The server modules quiet these loggers at import, so that a demo trace is
+    not buried in framework chatter. Undo that here rather than there, so the
+    quiet default survives for everyone who did not ask for this.
+    """
+    handler = logging.StreamHandler(sys.stderr)
+    handler.setFormatter(logging.Formatter("%(levelname)-5s [%(name)s] %(message)s"))
+    root = logging.getLogger()
+    root.handlers = [handler]
+    root.setLevel(logging.DEBUG)
+    for name in ("mcp", "mcp.server", "mcp.server.lowlevel", "FastMCP", "mcp_servers.trace"):
+        logging.getLogger(name).setLevel(logging.DEBUG)
 
 
 def lan_ip() -> str | None:
@@ -99,6 +193,14 @@ def build_parser(server_key: str) -> argparse.ArgumentParser:
         "for whenever a client misbehaves, since at the default level a failing request "
         "leaves no trace and only uvicorn's own warnings appear.",
     )
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        default=_env_default("MCP_DEBUG", "") not in ("", "0", "false"),
+        help="trace every tool call — arguments, result or error, and duration — "
+        "plus the MCP framework's own debug output. Writes to stderr, so it is "
+        "safe under stdio as well as http.",
+    )
     return parser
 
 
@@ -147,6 +249,10 @@ def _port_is_free(host: str, port: int) -> bool:
 def serve(mcp, server_key: str, argv: list[str] | None = None) -> int:
     """Run `mcp` on the transport named by the command line or environment."""
     args = build_parser(server_key).parse_args(argv)
+
+    if args.debug:
+        enable_debug_logging()
+        trace_tool_calls(mcp)
 
     if args.transport == "stdio":
         # Unchanged behaviour: a pipe to the parent process, no address.

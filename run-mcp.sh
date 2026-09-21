@@ -6,7 +6,13 @@
 #   ./run-mcp.sh policy_kb           the policy advisor instead
 #   ./run-mcp.sh --port 9000         extra flags pass straight through
 #   ./run-mcp.sh --host 127.0.0.1    keep it on this machine
+#   ./run-mcp.sh --no-debug          without the per-tool-call trace
 #   ./run-mcp.sh --help              the full option list
+#
+# Serving here means serving clients you did not write, so this turns on the
+# access log and a trace of every tool call by default. _serve.py leaves both
+# off, because under the agent these servers are stdio subprocesses whose
+# output nobody is watching.
 #
 # Run directly, the servers speak stdio, because that is what agent/core.py
 # spawns them for. This script is for the other case: putting them on HTTP so
@@ -41,6 +47,8 @@ module_for() {
 SERVER="customer_support"
 ARGS=()
 HAS_TRANSPORT=0
+HAS_LOG_LEVEL=0
+HAS_DEBUG=0
 
 for arg in "$@"; do
   case "$arg" in
@@ -51,6 +59,16 @@ for arg in "$@"; do
     --transport|--transport=*)
       HAS_TRANSPORT=1
       ARGS+=("$arg")
+      ;;
+    --log-level|--log-level=*)
+      HAS_LOG_LEVEL=1
+      ARGS+=("$arg")
+      ;;
+    --debug|--no-debug)
+      # --no-debug is this script's own: it suppresses the default below
+      # rather than reaching _serve.py, which has no such flag.
+      HAS_DEBUG=1
+      [[ "$arg" == "--debug" ]] && ARGS+=("$arg")
       ;;
     -*)
       ARGS+=("$arg")
@@ -97,6 +115,19 @@ fi
 
 if [[ $HAS_TRANSPORT -eq 0 ]]; then
   ARGS=("--transport" "http" "${ARGS[@]+"${ARGS[@]}"}")
+fi
+
+# Serving over HTTP means clients you did not write, so the access log and a
+# trace of every tool call are worth their noise: between them they are the
+# only record of what a client asked for and what it got back. _serve.py
+# keeps both off by default, for the agent's stdio subprocesses where the
+# output would be noise nobody asked for. Pass --no-debug or an explicit
+# --log-level to opt back out.
+if [[ $HAS_LOG_LEVEL -eq 0 ]]; then
+  ARGS=("--log-level" "info" "${ARGS[@]+"${ARGS[@]}"}")
+fi
+if [[ $HAS_DEBUG -eq 0 ]]; then
+  ARGS=("--debug" "${ARGS[@]+"${ARGS[@]}"}")
 fi
 
 # cd so `python -m mcp_servers.…` resolves the package from the current
