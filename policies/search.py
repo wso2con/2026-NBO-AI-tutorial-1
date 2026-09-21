@@ -1,19 +1,28 @@
-"""Shared policy-KB retrieval — same code path for v1 and v2.
+"""Shared policy-KB retrieval used by both demo agents.
 
-Both agents read from the same `policies/*.md` files using the same
-keyword-scored matcher and return the same shape. The DIFFERENCE
-between the two agents is in framing, not substance: v1 exposes this
-via `search_kb` with a one-line docstring; v2 exposes it via
-`search_policy_kb` over MCP with a docstring that says "always call
-this BEFORE compensating actions" and a `handle-refund` skill that
-names the procedure. Same evidence on the table; different ergonomics
-push the LLM toward different first moves. That's the §6
-Plan-before-commit lesson — telling the LLM to consult policy isn't
-the same as wiring it to consult policy.
+The first-cut tool returns this retriever's top-three policy documents directly
+to the customer-support model. The engineered policy-advisor MCP uses the same
+retrieval result internally, then applies a specialist LLM and returns only a
+case-specific decision brief. The corpus and candidate selection are therefore
+shared; the context boundary is what differs.
 
-The retrieval itself is deliberately simple: parse frontmatter,
-score by `keywords` (2 pts) + title word overlap (1 pt), keep the
-top 3. Same scoring on both sides keeps the variable isolated.
+Retrieval is deliberately simple: score by frontmatter keywords and title-word
+overlap, then keep the top three. This makes the context-engineering comparison
+visible without turning the lab into a search-ranking exercise.
+
+Scoring alone is not enough, though, and deliberately staying dumb about
+ranking is exactly why. These policies are a corpus, not a pile: a category
+policy routinely delegates part of its answer to another document by naming it
+in backticks (`cancellation` hands the arithmetic to `refund_calculation` and
+the limit to `refund_authority`). A keyword scorer cannot see that, because the
+words that would rank the delegated document are in the CUSTOMER'S question
+only when the customer happens to use them. Ask "can I cancel this?" and the
+document holding the percentage never surfaces, so the brief that comes back is
+confidently silent about the money.
+
+So `follow_references=True` reads the cross-references the policy authors
+already wrote and pulls the cited documents in alongside the scored hits. It is
+resolution, not ranking — the link is declared in the text, not inferred.
 """
 
 from __future__ import annotations
@@ -22,6 +31,17 @@ import re
 from pathlib import Path
 
 POLICIES_DIR = Path(__file__).parent
+_GENERIC_TITLE_WORDS = {
+    "order",
+    "orders",
+    "item",
+    "items",
+    "customer",
+    "customers",
+    "policy",
+    "when",
+    "within",
+}
 
 
 def _parse_policy(path: Path) -> dict:
@@ -72,13 +92,38 @@ def _load_policies() -> list[dict]:
     return [_parse_policy(p) for p in sorted(POLICIES_DIR.glob("*.md"))]
 
 
-def search(query: str, top_k: int = 3) -> list[dict]:
+def _referenced_ids(rule: str, known_ids: set[str]) -> list[str]:
+    """Policy ids this document names in backticks, in order of appearance.
+
+    Only ids that exist in the corpus are returned, so a renamed or mistyped
+    reference resolves to nothing rather than to a fabricated candidate.
+    """
+    seen: list[str] = []
+    for token in re.findall(r"`([a-z0-9_]+)`", rule):
+        if token in known_ids and token not in seen:
+            seen.append(token)
+    return seen
+
+
+def search(
+    query: str,
+    top_k: int = 3,
+    follow_references: bool = False,
+    max_total: int = 8,
+) -> list[dict]:
     """Keyword + title-overlap scoring; top_k matches.
 
     Returns a list of `{id, title, rule, relevance}` dicts. If nothing
     scored above zero, returns a single `no_match` placeholder pointing
     the caller at escalation — same shape so consumers don't branch on
     "empty vs full" responses.
+
+    With `follow_references`, any policy named in backticks by a scored hit is
+    appended after the scored hits, carrying `relevance: 0` and a
+    `referenced_by` field, up to `max_total` documents. The defaults leave the
+    first-cut agent's tool exactly as it was: three scored documents, no
+    expansion. The engineered advisor opts in, because expansion feeds the
+    specialist model behind the context boundary and never the main agent.
     """
     policies = _load_policies()
     q = query.lower()
@@ -90,7 +135,7 @@ def search(query: str, top_k: int = 3) -> list[dict]:
             if isinstance(kw, str) and kw.lower() in q:
                 score += 2
         for word in p["title"].lower().split():
-            if word in q and len(word) > 3:
+            if word in q and len(word) > 3 and word not in _GENERIC_TITLE_WORDS:
                 score += 1
         if score > 0:
             matches.append((score, p))
@@ -110,7 +155,7 @@ def search(query: str, top_k: int = 3) -> list[dict]:
             }
         ]
 
-    return [
+    selected = [
         {
             "id": p["id"],
             "title": p["title"],
@@ -119,3 +164,28 @@ def search(query: str, top_k: int = 3) -> list[dict]:
         }
         for score, p in matches[:top_k]
     ]
+    if not follow_references:
+        return selected
+
+    by_id = {p["id"]: p for p in policies}
+    chosen_ids = {item["id"] for item in selected}
+    for item in list(selected):
+        if len(selected) >= max_total:
+            break
+        for ref_id in _referenced_ids(item["rule"], set(by_id)):
+            if len(selected) >= max_total:
+                break
+            if ref_id in chosen_ids:
+                continue
+            ref = by_id[ref_id]
+            chosen_ids.add(ref_id)
+            selected.append(
+                {
+                    "id": ref["id"],
+                    "title": ref["title"],
+                    "rule": ref["rule"],
+                    "relevance": 0,
+                    "referenced_by": item["id"],
+                }
+            )
+    return selected

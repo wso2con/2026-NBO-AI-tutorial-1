@@ -1,26 +1,37 @@
 ---
 id: shipping_delay
-title: Shipping delay compensation
+title: Compensation for late or delayed deliveries
 keywords: [delay, delayed, late, shipping, tracking, where is my order]
 ---
 
-# Shipping delay compensation
+# Compensation for late or delayed deliveries
 
-Orders delayed by more than 3 business days qualify for a **$10 store credit**.
-Delays over 7 business days qualify for **$25 store credit**.
+This policy applies to an order that remains active and is expected to reach
+the customer after its estimated delivery date. It provides store credit for
+qualifying delay; it does not cancel the shipment, create a return, or convert
+the order into a lost-package claim.
 
-The credit is issued *on top of* the existing order — not as a refund. Customer
-still receives the order; the credit applies to a future purchase.
+Measure delay using the operational order record's business-day delay value.
+Do not calculate delay from conversational dates when the system already
+provides `delivery_days_late`.
 
-## Agent action
+- More than 3 and no more than 7 business days late qualifies for store credit
+  equal to 10% of the order total.
+- More than 7 business days late qualifies for store credit equal to 25% of
+  the order total.
+- Three business days late or less does not qualify. “More than 3” begins at
+  four business days; “more than 7” begins at eight.
 
-Issue a store credit:
-- amount: $10 (or $25 if the delay exceeds 7 business days)
-- reason code: `"shipping_delay_credit"`
+Use reason code `shipping_delay_credit`. The order remains active and the
+customer still receives it. Do not promise cancellation, intercept, replacement,
+or a full refund merely because delay credit is available.
 
-Cite this policy in the reply.
+Delay caused by an incorrect customer-supplied address or a missed carrier
+pickup does not qualify. When the cause is unknown, verify it if a tool exposes
+the cause; otherwise do not invent an exclusion. Credits already recorded for
+the same order count toward net entitlement under `refund_calculation`, and the
+resulting transaction remains subject to `refund_authority`.
 
-## Out of scope
-
-- Delays that haven't yet exceeded 3 business days — politely set expectation, no credit yet.
-- Delays caused by customer (wrong address, missed pickup) — use carrier-issue procedure instead.
+If the customer's actual goal is receipt before a deadline, explain the known
+tracking state and treat compensation as a secondary remedy. A credit does not
+prove the shipment will arrive by the customer's deadline.

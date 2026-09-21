@@ -1,6 +1,6 @@
 """Planner — a small LLM call that runs BEFORE the main agent on every turn.
 
-Shared module: both `cs_agent_v1` and `cs_agent_v2` import this same file
+Shared module: both `cs_agent_first_cut` and `cs_agent_engineered` import this same file
 from the lab root. Per-agent differences (which tools exist, whether
 skills are wired) are passed in via keyword arguments — the planner
 itself is agent-agnostic.
@@ -26,8 +26,8 @@ Catalogue strategy:
   agent has, with no drift. When called without a `tools_catalogue`
   override, falls back to a hardcoded list (kept for tests / REPL).
 - **Skills**: caller passes either a catalogue string or sets
-  `skills_enabled=False` to drop the skills section entirely. v1 has no
-  skills loader, so it always passes `skills_enabled=False`. v2 passes
+  `skills_enabled=False` to drop the skills section entirely. first-cut has no
+  skills loader, so it always passes `skills_enabled=False`. engineered passes
   `skills_enabled=bool(profile.skills_dir)`.
 - **Policies**: auto-discovered from `policies/*.md` frontmatter at the
   lab root (same `policies/` directory both agents share).
@@ -37,10 +37,12 @@ from __future__ import annotations
 
 import os
 import re
-from datetime import date
 from pathlib import Path
 
 from openai import AsyncOpenAI
+
+from demo_clock import today_iso
+from loop_state import TokenSplit, openai_usage
 
 
 _LAB_ROOT = Path(__file__).parent
@@ -73,7 +75,7 @@ def _parse_frontmatter(content: str) -> dict[str, str]:
 def skills_catalogue_from_dir(skills_dir: Path | str) -> str:
     """`name — description` per SKILL.md frontmatter, sorted by skill dir.
 
-    Public helper: callers (i.e. v2's main.py) can pass their resolved
+    Public helper: callers (i.e. engineered's main.py) can pass their resolved
     skills directory in. Used by `plan_for_prompt`'s default skill-catalogue
     fallback when `skills_enabled=True` and no override is supplied.
     """
@@ -126,9 +128,9 @@ def format_tool_specs(tool_specs: list[dict]) -> str:
 
 
 def _tools_catalogue_fallback() -> str:
-    """Hardcoded mirror of v2's MCP tool surface, used only when the caller
-    doesn't pass a live tools catalogue (tests, REPL). v1's tools are
-    differently shaped, so v1 must always pass a live catalogue via
+    """Hardcoded mirror of engineered's MCP tool surface, used only when the caller
+    doesn't pass a live tools catalogue (tests, REPL). first-cut's tools are
+    differently shaped, so first-cut must always pass a live catalogue via
     `format_tool_specs(agent.tool_registry.get_all_tool_specs())`."""
     return """\
 - lookup_customer — customer profile (name, tier, contact)
@@ -138,9 +140,9 @@ def _tools_catalogue_fallback() -> str:
 - get_refund_history — all prior refunds, with refund_percentage per entry
 - update_shipping_address — change address (only if not shipped)
 - cancel_order — cancel (only if not shipped). Does NOT auto-refund.
-- issue_refund — refund as a percentage of the order total
+- issue_refund — refund as a percentage of the order total, under a checked reason_code
 - escalate_to_human — open a human ticket
-- search_policy_kb — search the policy knowledge base
+- check_policy — retrieve and apply relevant policies to specific verified case facts
 - append_memory — one short note to this customer's episodic memory
 - compact_memory — rewrite the episodic memory file"""
 
@@ -161,7 +163,7 @@ def _planner_system_prompt(
     skills-related rule are all dropped — the planner can't suggest a
     skill the main agent has no way to load.
     """
-    today = date.today().isoformat()
+    today = today_iso()
 
     skills_on = skills_catalogue is not None
     skills_output_field = (
@@ -221,7 +223,7 @@ async def plan_for_prompt(
     skills_catalogue: str | None = None,
     policies_catalogue: str | None = None,
     skills_enabled: bool = True,
-) -> str:
+) -> tuple[str, TokenSplit]:
     """Generate a <plan> block for the customer's next-turn message.
 
     Args:
@@ -242,13 +244,16 @@ async def plan_for_prompt(
         skills_enabled: When False, the planner is told skills aren't
             available this turn and is instructed NOT to emit a `skills:`
             field. Pass `False` whenever the main agent doesn't have the
-            AgentSkills plugin loaded (v1 always; v2 when the skills
+            AgentSkills plugin loaded (first-cut always; engineered when the skills
             toggle is off). Otherwise the plan can suggest skills the
             agent has no way to load.
 
     Returns:
-        A string containing exactly one <plan>...</plan> block, ready to
-        prepend to the customer message before invoking the main agent.
+        `(plan, usage)` — a string containing exactly one <plan>...</plan>
+        block, ready to prepend to the customer message before invoking the
+        main agent, and this call's `TokenSplit`. The planner runs outside the
+        agent loop, so its spend is reported with the turn rather than metered
+        against the loop's total-token budget.
     """
     tools = tools_catalogue if tools_catalogue is not None else _tools_catalogue_fallback()
     if skills_enabled:
@@ -266,4 +271,4 @@ async def plan_for_prompt(
         ],
         temperature=0.2,
     )
-    return (response.choices[0].message.content or "").strip()
+    return (response.choices[0].message.content or "").strip(), openai_usage(response)

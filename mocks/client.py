@@ -1,7 +1,7 @@
 """CustomerSupportClient — file-backed mock backend, isolated per agent.
 
 Each agent gets its own data directory under `mocks/data/<agent_id>/`.
-v1 and v2 never share runtime state — one agent's refunds, cancellations,
+first-cut and engineered never share runtime state — one agent's refunds, cancellations,
 or address updates are completely invisible to the other. This is what
 makes the side-by-side demo a real comparison: each agent acts on the
 world it created, not a world contaminated by the other agent's writes.
@@ -11,7 +11,7 @@ shared: both agents start from the same fixtures. On first instantiation
 (or after `reset()`), the agent's own data files are repopulated from
 those shared seeds.
 
-Why file-backed and not pure in-memory: v2's MCP subprocesses are
+Why file-backed and not pure in-memory: engineered's MCP subprocesses are
 re-spawned whenever the cached Agent is dropped (e.g. on /api/end_session
 during the §5 episodic-memory demo). An in-memory client would lose
 every mutation on that respawn — refunds would silently disappear,
@@ -25,7 +25,7 @@ is refreshed from disk on every mutation made by THIS instance.
 
 To reset state: call `reset()` (or `reset_data_files(agent_id)` without
 an instance) — wipes only that agent's data files and reseeds them from
-the shared canonical seeds. v1's /api/reset and v2's /api/reset each
+the shared canonical seeds. first-cut's /api/reset and engineered's /api/reset each
 reset their own agent's data; the web UI's "Reset" button hits both
 endpoints so the lab returns to a known starting state across the board.
 """
@@ -33,9 +33,11 @@ endpoints so the lab returns to a known starting state across the board.
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime
+import os
+import tempfile
 from pathlib import Path
 
+from demo_clock import now_iso
 from mocks.models import Customer, Order
 
 SEEDS_DIR = Path(__file__).parent / "seeds"
@@ -44,6 +46,7 @@ DATA_ROOT = Path(__file__).parent / "data"
 CUSTOMERS_FILE = "customers.json"
 ORDERS_FILE = "orders.json"
 LEDGER_FILE = "ledger.json"
+FAULTS_FILE = "faults.json"
 
 
 def _load_seed(name: str):
@@ -56,6 +59,35 @@ def _agent_data_dir(agent_id: str) -> Path:
     return DATA_ROOT / agent_id
 
 
+def _write_json(path: Path, value) -> None:
+    """Publish `value` at `path` in one step.
+
+    The MCP servers run as separate processes against these same files, so a
+    reader can land at any instant during a write. `Path.write_text` truncates
+    first and fills after, which gives that reader a window on an empty or
+    half-written file — and `unlink`-then-rewrite gives it a window on no file
+    at all, which is the `[Errno 2] No such file or directory: orders.json` a
+    tool call hits when it runs while a reset is in flight.
+
+    Writing a temp file in the same directory and `os.replace`-ing it over the
+    target closes both windows: the rename is atomic on POSIX, so every reader
+    sees either the whole previous file or the whole new one, and the target
+    never stops existing.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = json.dumps(value, indent=2) + "\n"
+    # Same directory as the target: os.replace is only atomic within a
+    # filesystem, and /tmp may well be a different one.
+    fd, tmp_name = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w") as handle:
+            handle.write(payload)
+        os.replace(tmp_name, path)
+    except BaseException:
+        Path(tmp_name).unlink(missing_ok=True)
+        raise
+
+
 def _seed_if_missing(data_dir: Path) -> None:
     """Lazy initialisation: copy shared seeds into the agent's data dir for
     any file that doesn't exist yet. Doesn't touch files that ARE already
@@ -66,22 +98,47 @@ def _seed_if_missing(data_dir: Path) -> None:
         target = data_dir / name
         if target.exists():
             continue
-        target.write_text(json.dumps(_load_seed(name), indent=2) + "\n")
+        _write_json(target, _load_seed(name))
 
 
 def reset_data_files(agent_id: str) -> None:
-    """Delete the named agent's data files and reseed from the shared seeds.
-    Used by /api/reset on both agents (v1 calls it via `_client.reset()`;
-    v2 calls it directly from main.py so the next-spawned MCP subprocess
+    """Restore the named agent's data files to the shared seed state.
+    Used by /api/reset on both agents (first-cut calls it via `_client.reset()`;
+    engineered calls it directly from main.py so the next-spawned MCP subprocess
     re-reads clean state). Only the named agent's data is touched — the
     sibling agent's state is left alone."""
     data_dir = _agent_data_dir(agent_id)
     data_dir.mkdir(parents=True, exist_ok=True)
+    # Overwrite in place rather than unlink-then-reseed. The MCP subprocess may
+    # be mid-tool-call against these files, and a file that briefly does not
+    # exist fails that call outright; a file replaced atomically just serves it
+    # the seed state, which is what a reset means anyway.
     for name in (CUSTOMERS_FILE, ORDERS_FILE, LEDGER_FILE):
-        target = data_dir / name
-        if target.exists():
-            target.unlink()
+        _write_json(data_dir / name, _load_seed(name))
+    _write_json(data_dir / FAULTS_FILE, {})
+
+
+def arm_fault(agent_id: str, fault: str) -> None:
+    """Arm a one-shot backend fault for the named agent."""
+    data_dir = _agent_data_dir(agent_id)
     _seed_if_missing(data_dir)
+    path = data_dir / FAULTS_FILE
+    state = json.loads(path.read_text()) if path.exists() else {}
+    state[fault] = True
+    _write_json(path, state)
+
+
+def consume_fault(agent_id: str, fault: str) -> bool:
+    """Consume a one-shot fault, returning whether it had been armed."""
+    path = _agent_data_dir(agent_id) / FAULTS_FILE
+    if not path.exists():
+        return False
+    state = json.loads(path.read_text())
+    if not state.get(fault):
+        return False
+    state[fault] = False
+    _write_json(path, state)
+    return True
 
 
 class CustomerSupportClient:
@@ -117,10 +174,10 @@ class CustomerSupportClient:
     # ----- Disk write-through ------------------------------------------------
 
     def _flush_orders(self) -> None:
-        (self._data_dir / ORDERS_FILE).write_text(json.dumps(self._orders, indent=2) + "\n")
+        _write_json(self._data_dir / ORDERS_FILE, self._orders)
 
     def _flush_ledger(self) -> None:
-        (self._data_dir / LEDGER_FILE).write_text(json.dumps(self._ledger, indent=2) + "\n")
+        _write_json(self._data_dir / LEDGER_FILE, self._ledger)
 
     # ----- Reads -------------------------------------------------------------
 
@@ -136,9 +193,9 @@ class CustomerSupportClient:
         DB id, shard key, audit pointer, lifecycle / segment flags,
         replica lag, etag, legacy duplicate fields, opt-in history.
 
-        Tools that surface this raw (e.g. v1's `get_customer_full`) hand
+        Tools that surface this raw (e.g. first-cut's `get_customer_full`) hand
         the agent ~15 noise fields it has to scan past. Tools that project
-        (v2's `lookup_customer`) only return what the agent needs.
+        (engineered's `lookup_customer`) only return what the agent needs.
         """
         raw = self._customers.get(customer_id)
         if raw is None:
@@ -198,7 +255,7 @@ class CustomerSupportClient:
             "amount_usd": amount_usd,
             "reason": reason,
             "actor_agent_id": agent_id,
-            "timestamp": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+            "timestamp": now_iso(),
         }
         if extra:
             entry.update(extra)
@@ -349,7 +406,7 @@ class CustomerSupportClient:
         """SOAP-era refund history wrapper. Same underlying data as
         `get_refund_history`, but wrapped in the kind of XML-attribute-styled,
         deprecation-warning-laden envelope a legacy SOAP-to-JSON adapter
-        produces. v1's `get_refund_history` tool surfaces this raw so the
+        produces. first-cut's `get_refund_history` tool surfaces this raw so the
         agent has to scan past the noise to find the four fields that
         actually matter (ref, order_id, amount_usd, reason).
         """
@@ -398,7 +455,7 @@ class CustomerSupportClient:
     def get_open_tickets_legacy(self, customer_id: str) -> dict:
         """SOAP-era ticket-list wrapper. Same data as `get_open_tickets`,
         but with attribute-styled keys, ACLs, legacy priority codes, and
-        a deprecation hint. v1 surfaces this raw."""
+        a deprecation hint. first-cut surfaces this raw."""
         tickets = self.get_open_tickets(customer_id)
         priority_code = {"low": 4, "normal": 3, "high": 2, "urgent": 1}
         return {

@@ -3,8 +3,9 @@ import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { cn } from "@/lib/utils";
 import type { AgentService, AgentTool } from "@/lib/api";
-import type { AgentState } from "@/lib/types";
+import type { AgentState, Turn } from "@/lib/types";
 import { MemoryDrawer } from "./MemoryDrawer";
+import { SystemPromptDrawer } from "./SystemPromptDrawer";
 import { ToolsDrawer } from "./ToolsDrawer";
 import { TurnCard } from "./TurnCard";
 
@@ -12,10 +13,21 @@ interface Props {
   service: AgentService;
   state: AgentState;
   tools: AgentTool[];
+  /** Rendered system prompt from /api/tools. */
+  systemPrompt: string;
   toolsLoading: boolean;
   toolsError: string | null;
   onToggleEnabled: () => void;
-  // v2-only: feature toggles. Undefined for v1 — the row doesn't render.
+  /** Answers a turn's inline pause prompt (currently the token-budget
+   *  continue/stop decision). */
+  onAnswerPause?: (
+    turn: Turn,
+    approved: boolean,
+    decisions?: Record<string, boolean>,
+  ) => void;
+  /** Disables the pause buttons while any agent is mid-stream. */
+  pauseBusy?: boolean;
+  // engineered-only: feature toggles. Undefined for first-cut — the row doesn't render.
   skillsEnabled?: boolean;
   episodicEnabled?: boolean;
   // `plannerEnabled` is per-request (no agent rebuild), so it can flip
@@ -27,7 +39,7 @@ interface Props {
   // Disables the feature toggles while a chat is in-flight (same as the
   // top-bar reset button).
   featuresDisabled?: boolean;
-  // v2-only: identifies whose memory file to read, and a bump counter the
+  // engineered-only: identifies whose memory file to read, and a bump counter the
   // parent increments after events that may have modified the file. Both
   // are required when `episodicEnabled` is true; otherwise unused.
   customerId?: string;
@@ -38,9 +50,12 @@ export function AgentPanel({
   service,
   state,
   tools,
+  systemPrompt,
   toolsLoading,
   toolsError,
   onToggleEnabled,
+  onAnswerPause,
+  pauseBusy,
   skillsEnabled,
   episodicEnabled,
   plannerEnabled,
@@ -64,10 +79,10 @@ export function AgentPanel({
   const isError = status === "error";
   const isComplete = displayStatus === "complete";
 
-  // v1 = amber accent, v2 = emerald. Used for the top stripe and the
+  // first-cut = amber accent, engineered = emerald. Used for the top stripe and the
   // status dot when the panel is idle / running so the columns are visually
   // distinct at a glance — even before the audience reads the labels.
-  const accentClass = service.variant === "v1" ? "bg-v1" : "bg-v2";
+  const accentClass = service.variant === "first_cut" ? "bg-first-cut" : "bg-engineered";
   const dotColor = isError ? "bg-destructive" : accentClass;
 
   const statusVariant: "secondary" | "destructive" | "success" = isError
@@ -83,7 +98,7 @@ export function AgentPanel({
         !state.enabled && "opacity-50",
       )}
     >
-      {/* v1/v2 accent stripe */}
+      {/* first-cut/engineered accent stripe */}
       <div className={cn("h-[3px] w-full shrink-0", accentClass)} aria-hidden />
 
       {/* Header */}
@@ -101,7 +116,7 @@ export function AgentPanel({
             {service.label}
           </div>
           <div className="font-mono text-[11px] text-muted-foreground">
-            {service.caption} · :{new URL(service.baseUrl).port}
+            {service.caption}
           </div>
         </div>
         <div className="ml-auto flex shrink-0 items-center gap-1.5">
@@ -113,7 +128,7 @@ export function AgentPanel({
               {displayStatus}
             </Badge>
           )}
-          {/* v2-only feature toggles. Flipping either restarts the v2 session
+          {/* engineered-only feature toggles. Flipping either restarts the engineered session
               (agent rebuild — skills/episodic memory are baked at build time).
               App.tsx confirms the destruction before calling the handler. */}
           {onToggleSkills && (
@@ -165,23 +180,46 @@ export function AgentPanel({
       </div>
       <Separator />
 
-      {service.variant === "v2" && (
-        <div className="flex flex-wrap items-center gap-1 border-b bg-v2/5 px-4 py-2 text-[10px] uppercase tracking-wide text-muted-foreground">
-          <span className="mr-1 font-semibold text-v2">harness</span>
-          <Badge variant="outline">explicit run state</Badge>
-          <Badge variant="outline">progress control</Badge>
-          <Badge variant="outline">safe recovery</Badge>
-        </div>
-      )}
+      {/* Capability banner. Both panels carry one so the two columns stay
+          row-aligned; the badges say what each loop does and does not own. */}
+      <div
+        className={cn(
+          "flex flex-wrap items-center gap-1 border-b px-4 py-2 text-[10px] uppercase tracking-wide text-muted-foreground",
+          service.variant === "engineered" ? "bg-engineered/5" : "bg-first-cut/5",
+        )}
+      >
+        <span
+          className={cn(
+            "mr-1 font-semibold",
+            service.variant === "engineered" ? "text-engineered" : "text-first-cut",
+          )}
+        >
+          {service.variant === "engineered" ? "harness" : "bare loop"}
+        </span>
+        {(service.variant === "engineered"
+          ? ["explicit run state", "progress control", "safe recovery"]
+          : ["implicit run state", "no progress control", "no recovery"]
+        ).map((capability) => (
+          <Badge key={capability} variant="outline">
+            {capability}
+          </Badge>
+        ))}
+      </div>
 
       {/* Tools catalog drawer — collapsed by default */}
+      <SystemPromptDrawer
+        content={systemPrompt}
+        loading={toolsLoading}
+        error={toolsError ?? undefined}
+      />
+
       <ToolsDrawer
         tools={tools}
         loading={toolsLoading}
         error={toolsError ?? undefined}
       />
 
-      {/* Episodic-memory file viewer — only when the v2 feature is on.
+      {/* Episodic-memory file viewer — only when the engineered feature is on.
           Lets the audience inspect what the agent committed to disk
           across the next-session boundary. */}
       {episodicEnabled && customerId && (
@@ -212,7 +250,12 @@ export function AgentPanel({
         ) : (
           state.turns.map((t, i) => (
             <div key={t.id} className="flex flex-col gap-3">
-              <TurnCard turn={t} isLatest={i === state.turns.length - 1} />
+              <TurnCard
+                turn={t}
+                isLatest={i === state.turns.length - 1}
+                onAnswerPause={onAnswerPause}
+                pauseBusy={pauseBusy}
+              />
               {t.session_ended_after && (
                 <div className="flex items-center gap-2 px-1 text-[10px] uppercase tracking-widest text-muted-foreground">
                   <div className="h-px flex-1 bg-border" />

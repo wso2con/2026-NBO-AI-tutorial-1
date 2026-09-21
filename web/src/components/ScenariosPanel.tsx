@@ -108,6 +108,11 @@ function ScenarioCard({ scenario, disabled, onPrompt }: ScenarioCardProps) {
             {scenario.model}
           </Badge>
         )}
+        {scenario.fault === "refund_service_timeout" && (
+          <Badge variant="outline" className="border-amber-500/50 text-[10px] text-amber-700 dark:text-amber-400">
+            arms timeout
+          </Badge>
+        )}
       </div>
       <RichText text={scenario.goal} className="mt-1 text-muted-foreground" />
       <div className="mt-2 flex flex-col gap-1.5">

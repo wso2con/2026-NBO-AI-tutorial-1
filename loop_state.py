@@ -26,6 +26,36 @@ LoopDecision = Literal[
 ]
 
 
+@dataclass(frozen=True)
+class TokenSplit:
+    """One model call's usage, kept split at every boundary it crosses.
+
+    Both halves count toward the loop budget. Keeping them split makes the
+    context cost (input) and generated work (output) visible independently.
+    """
+
+    input_tokens: int = 0
+    output_tokens: int = 0
+
+    @property
+    def total(self) -> int:
+        return self.input_tokens + self.output_tokens
+
+
+def openai_usage(response: Any) -> TokenSplit:
+    """Split an OpenAI chat-completion response's usage.
+
+    Reasoning tokens are billed as completion tokens and are left inside
+    `output_tokens` on purpose: they are work the model did, and hiding them
+    would make the meter understate a reasoning model's real spend.
+    """
+    usage = getattr(response, "usage", None)
+    return TokenSplit(
+        input_tokens=int(getattr(usage, "prompt_tokens", 0) or 0),
+        output_tokens=int(getattr(usage, "completion_tokens", 0) or 0),
+    )
+
+
 @dataclass
 class OperationState:
     operation_id: str
@@ -45,19 +75,56 @@ class RunState:
     progress: dict[str, str] = field(default_factory=dict)
     operations: dict[str, OperationState] = field(default_factory=dict)
     success_criteria: list[str] = field(default_factory=list)
-    verified_criteria: dict[str, bool] = field(default_factory=dict)
     iteration_count: int = 0
     tool_call_count: int = 0
+    # Model calls actually started this turn, counted by the budget guard at
+    # the point it can still stop them (`iteration_count` is the trace view,
+    # drained asynchronously by the service).
+    model_call_count: int = 0
+    # Exact provider-reported usage for completed model calls in this turn.
+    # This powers the context chart; projected estimates are kept only for the
+    # pre-call budget decision.
+    model_call_usage: list[dict[str, int]] = field(default_factory=list)
     max_iterations: int = 6
-    max_tool_calls: int = 12
+    # The budget is denominated in total loop tokens: input plus output.
+    # The budget belongs to the TASK, not to one turn. `token_budget` is the
+    # size of a single grant; the ceiling is one grant plus one more for every
+    # extension the customer has approved (`token_ceiling`). The meter
+    # accumulates across every turn of the task, so a "yes" resumes into a
+    # bigger ceiling rather than a cleared meter — otherwise work could never end.
+    token_budget: int = 40_000
+    budget_grants: int = 0
+    # Summed from each model call's own reported usage, so both survive multiple
+    # turns of one task and an agent instance shared with other runs.
+    # Harness-side model calls are intentionally outside this loop budget.
+    output_tokens: int = 0
+    input_tokens: int = 0
+    # Largest single call's input, used to show context growth across calls.
+    peak_call_input_tokens: int = 0
+    projected_next_call_tokens: int = 0
+    # Tokens spent by model calls the harness makes around the loop — the
+    # planner, the budget wrap-up, the policy evaluator. They are real spend on
+    # the turn, so they are reported, but they are not what the budget meters.
+    auxiliary_output_tokens: int = 0
+    auxiliary_input_tokens: int = 0
     budget_warning_ratio: float = 0.9
+    # Auto-compaction line for this session, in projected input tokens for the
+    # next model call. None or 0 means the dial is off and context grows
+    # untouched. Set per request, so it can change between turns of one task.
+    compact_at_tokens: int | None = None
+    # One entry per compaction the harness performed this turn: what the next
+    # call would have cost, what it costs now, and how many messages were
+    # folded into the summary.
+    compactions: list[dict[str, Any]] = field(default_factory=list)
+    # Set by the graceful guard when the warning threshold is crossed: no more
+    # tool dispatches, one last model call to report status and ask the human.
+    budget_wrapup: bool = False
     resume_condition: str | None = None
     pending_request: str | None = None
     exit_reason: str | None = None
     event_count: int = 0
     tool_history: list[dict[str, Any]] = field(default_factory=list)
-    validation_attempts: int = 0
-    validation_status: str = "pending"
+    evaluation_status: str = "pending"
     contract_source: str | None = None
     loaded_skills: list[str] = field(default_factory=list)
     ordering_constraints: list[dict[str, str]] = field(default_factory=list)
@@ -67,15 +134,14 @@ class RunState:
         payload = asdict(self)
         if payload.get("scenario_id") is None:
             payload.pop("scenario_id", None)
-        payload["tool_budget_used_percent"] = (
-            round(100 * self.tool_call_count / self.max_tool_calls)
-            if self.max_tool_calls
+        payload["token_ceiling"] = token_ceiling(self)
+        payload["token_budget_used_percent"] = (
+            round(100 * loop_tokens_used(self) / token_ceiling(self))
+            if token_ceiling(self)
             else 100
         )
-        payload["tool_calls_remaining"] = max(
-            0, self.max_tool_calls - self.tool_call_count
-        )
-        payload["grace_threshold_calls"] = grace_threshold_calls(self)
+        payload["tokens_remaining"] = max(0, token_ceiling(self) - loop_tokens_used(self))
+        payload["token_warning_threshold"] = token_warning_threshold(self)
         return payload
 
 
@@ -92,22 +158,66 @@ class RunStore:
         run_id: str | None,
         customer_id: str,
         goal: str,
-        tool_budget: int | None = None,
+        token_budget: int | None = None,
+        compact_at: int | None = None,
         scenario_id: str | None = None,
+        resume: bool = False,
+        continue_turn: bool = False,
     ) -> RunState:
+        """Begin a turn.
+
+        A repeated run id is the same chat session, so its token meter carries
+        across ordinary turns. `resume=True` additionally marks a continuation
+        after a human-approved budget grant. A new run id starts from zero.
+
+        `continue_turn=True` says this call is not a new turn at all: it picks
+        up a turn that stopped mid-flight, as a human-confirmation resume does
+        when the parked tool call finally runs. The per-turn counters —
+        iterations, tool calls, and the per-model-call usage the console draws
+        its context bars from — then carry on instead of restarting, so the
+        work done before the pause and the work done after it are reported as
+        the one turn they are. Without it the bars redraw from the resume and
+        the model calls that led up to the confirmation vanish from the turn
+        that made them.
+        """
         key = run_id or str(uuid4())
         with self._lock:
             run = self._runs.get(key)
-            if run is None:
+            is_new = run is None
+            if is_new:
                 run = RunState(key, scenario_id, customer_id, goal)
                 self._runs[key] = run
+                resume = False
             else:
                 run.status = "running"
                 run.next_loop_state = "CONTINUE"
                 run.exit_reason = None
-            run.iteration_count = 0
-            run.tool_call_count = 0
-            run.max_tool_calls = max(1, min(int(tool_budget or 12), 50))
+            if not continue_turn:
+                run.iteration_count = 0
+                run.tool_call_count = 0
+                run.model_call_count = 0
+                run.model_call_usage = []
+                run.compactions = []
+                run.projected_next_call_tokens = 0
+            # The compaction line is a live control, not a property of the task:
+            # a presenter who lowers it mid-session means the next model call,
+            # not the next chat.
+            run.compact_at_tokens = int(compact_at) if compact_at else None
+            # Always cleared: the guard's verdict belongs to the model call
+            # about to happen, not to the one that set it.
+            run.budget_wrapup = False
+            if is_new:
+                run.token_budget = max(1_000, min(int(token_budget or 40_000), 500_000))
+                run.budget_grants = 0
+                run.output_tokens = 0
+                run.input_tokens = 0
+                run.peak_call_input_tokens = 0
+                run.auxiliary_output_tokens = 0
+                run.auxiliary_input_tokens = 0
+            elif not resume and token_budget is not None:
+                # Let the presenter change the session ceiling without erasing
+                # the spend already visible against it.
+                run.token_budget = max(1_000, min(int(token_budget), 500_000))
             return run
 
     def get(self, run_id: str) -> RunState | None:
@@ -175,16 +285,100 @@ def record_iteration(run: RunState) -> None:
 
 
 def record_tool_call(
-    run: RunState, tool_name: str, args: dict[str, Any] | None = None
+    run: RunState,
+    tool_name: str,
+    args: dict[str, Any] | None = None,
+    tool_use_id: str | None = None,
 ) -> None:
+    """Record one dispatch, keyed by the model's `toolUseId`.
+
+    Keyed rather than appended, because `BeforeToolCallEvent` fires more than
+    once for the same call. A write parked by `HumanConfirmationHook` raises
+    out of the event loop on the first pass and is re-dispatched on resume, so
+    a naive append leaves a ghost row behind: same tool, same target, no
+    result. A reviewer reading the trajectory sees a failed attempt that was
+    then retried, and reports a wasteful path that never happened.
+
+    The re-dispatch also carries better arguments than the first pass did.
+    `CustomerIdBindingHook` runs after this callback and fills the trusted
+    `customer_id` into the input dict, so the first snapshot shows the model's
+    raw proposal (often an empty id) and the second shows what was actually
+    sent. Refreshing the args on the repeat keeps the row honest.
+    """
+    snapshot = dict(args or {})
+    if tool_use_id:
+        for item in run.tool_history:
+            if item.get("tool_use_id") == tool_use_id:
+                item["args"] = snapshot
+                return
     run.tool_call_count += 1
     run.progress[f"called:{tool_name}"] = "done"
     run.tool_history.append(
         {
             "name": tool_name,
-            "args": dict(args or {}),
+            "tool_use_id": tool_use_id,
+            "args": snapshot,
             "result": None,
             "is_error": None,
+        }
+    )
+
+
+def record_compaction(
+    run: RunState,
+    *,
+    before_tokens: int,
+    after_tokens: int,
+    messages_before: int,
+    messages_after: int,
+    threshold: int,
+    overflow: bool = False,
+) -> dict[str, Any]:
+    """Record one compaction and return the entry, for the trace to announce.
+
+    Keyed to the model call it protects: `model_call_count` is incremented by
+    the budget guard, which runs after the context pipeline, so the call being
+    prepared right now is the next one. That lets the guard meter the context
+    that actually went out rather than the projection it was handed before
+    compaction ran.
+    """
+    entry = {
+        "call": run.model_call_count + 1,
+        "threshold_tokens": int(threshold),
+        "before_tokens": int(before_tokens),
+        "after_tokens": int(after_tokens),
+        "saved_tokens": max(0, int(before_tokens) - int(after_tokens)),
+        "messages_before": int(messages_before),
+        "messages_after": int(messages_after),
+        "messages_summarized": max(0, int(messages_before) - int(messages_after)),
+        "overflow": bool(overflow),
+    }
+    run.compactions.append(entry)
+    return entry
+
+
+def record_human_decision(
+    run: RunState,
+    *,
+    tool_name: str,
+    approved: bool,
+    tool_use_id: str | None = None,
+    customer_reply: str = "",
+) -> None:
+    """Put the consent step in the trajectory, between the call and its result.
+
+    Approval is an event in the path the agent took, not harness bookkeeping.
+    Without it the evaluators read a write that simply happened, and cannot
+    tell an authorised change from an unauthorised one — nor see that two
+    writes were approved separately rather than batched behind one yes.
+    """
+    run.tool_history.append(
+        {
+            "name": "human_approval",
+            "tool_use_id": tool_use_id,
+            "args": {"gated_tool": tool_name, "customer_reply": customer_reply},
+            "result": {"approved": approved},
+            "is_error": False,
         }
     )
 
@@ -195,130 +389,91 @@ def record_observation(
     tool_name: str,
     observation: Any,
     is_error: bool = False,
+    tool_use_id: str | None = None,
 ) -> None:
-    """Record backend evidence that can satisfy harness postconditions."""
+    """Record backend evidence that can satisfy harness postconditions.
+
+    Matched on `toolUseId` where the harness has one. Two writes issued in the
+    same model turn differ only in their arguments, so pairing them to results
+    by tool name alone can attach an outcome to the wrong call.
+    """
     run.progress["latest_tool"] = tool_name
     run.progress["latest_observation"] = "error" if is_error else "observed"
+    if tool_use_id:
+        for item in run.tool_history:
+            if item.get("tool_use_id") == tool_use_id:
+                item["result"] = observation
+                item["is_error"] = is_error
+                return
     for item in reversed(run.tool_history):
         if item["name"] == tool_name and item["result"] is None:
             item["result"] = observation
             item["is_error"] = is_error
             break
-    if not is_error:
-        run.verified_criteria["useful_observation"] = True
-        if tool_name in {"get_order", "get_customer_orders"}:
-            run.verified_criteria["order_observed"] = True
-        if tool_name in {"lookup_customer", "get_customer_verified"}:
-            run.verified_criteria["customer_observed"] = True
-        if tool_name == "get_customer_orders":
-            run.verified_criteria["related_orders_observed"] = True
-        if tool_name == "get_refund_history":
-            run.verified_criteria["refund_history_observed"] = True
-        if tool_name == "get_open_tickets":
-            run.verified_criteria["tickets_observed"] = True
-        if tool_name in {"search_policy_kb", "search_kb"}:
-            run.verified_criteria["policy_observed"] = True
-        if tool_name in {"issue_refund", "modify_order"}:
-            run.verified_criteria["refund_committed"] = True
-        if tool_name == "cancel_order":
-            run.verified_criteria["order_cancelled"] = True
-        if tool_name in {"update_shipping_address"}:
-            run.verified_criteria["address_update_observed"] = True
-        if tool_name in {"escalate_to_human", "escalate"}:
-            run.verified_criteria["ticket_opened"] = True
-            matching_call = next(
-                (
-                    item
-                    for item in reversed(run.tool_history)
-                    if item["name"] == tool_name and item["result"] is observation
-                ),
-                None,
-            )
-            reason = str((matching_call or {}).get("args", {}).get("reason", ""))
-            if "return label" in reason.lower():
-                run.verified_criteria["return_label_arranged"] = True
+def usage_payload(run: RunState) -> dict[str, Any]:
+    """Token spend for the task so far, reported alongside the agent's reply.
 
+    The governed total is loop input plus loop output. Harness-side planner,
+    reviewer and wrap-up calls remain available as diagnostics but are excluded
+    from the visible loop budget; the one-time policy MCP lookup is not tracked.
 
-def grace_threshold_calls(run: RunState) -> int:
-    """Whole-call threshold corresponding to the configured warning ratio."""
-    return max(1, floor(run.max_tool_calls * run.budget_warning_ratio))
-
-
-def verify_postconditions(run: RunState) -> tuple[bool, list[str]]:
-    missing = [
-        criterion
-        for criterion in run.success_criteria
-        if not run.verified_criteria.get(criterion, False)
-    ]
-    return not missing, missing
-
-
-def _tool_positions(run: RunState, name: str) -> list[int]:
-    return [
-        index
-        for index, item in enumerate(run.tool_history)
-        if item.get("name") == name and not item.get("is_error")
-    ]
-
-
-def record_response_evidence(run: RunState, reply: str) -> None:
-    """Record response-level evidence used by the pre-release validator.
-
-    The checks are deliberately narrow and contract-owned. They do not try to
-    grade arbitrary prose; they recognize only observable commitments supplied
-    by a Skill that the model actually loaded for this task.
+    Cumulative, not per turn: a task that has been continued twice reports
+    everything it has spent against the ceiling those continuations bought.
     """
-    text = reply.strip().lower()
-    run.verified_criteria["response_produced"] = bool(text)
-    if "photo_evidence_requested" in run.success_criteria:
-        asks_for_photo = "photo" in text and any(
-            phrase in text
-            for phrase in ("send", "share", "provide", "upload", "need")
-        )
-        run.verified_criteria["photo_evidence_requested"] = asks_for_photo
-
-
-def validate_response(run: RunState, reply: str) -> dict[str, Any]:
-    """Validate the proposed customer reply before releasing it.
-
-    This gate combines required postconditions with a few deterministic
-    trajectory invariants. It is intentionally not another LLM judge: every
-    failure points to missing evidence or an observable action ordering.
-    """
-    record_response_evidence(run, reply)
-    complete, missing = verify_postconditions(run)
-    violations: list[str] = []
-
-    for constraint in run.ordering_constraints:
-        before_positions = _tool_positions(run, constraint["before"])
-        after_positions = _tool_positions(run, constraint["after"])
-        if after_positions and (
-            not before_positions or min(before_positions) > min(after_positions)
-        ):
-            violations.append(constraint["violation"])
-    for precondition in run.action_preconditions:
-        if _tool_positions(run, precondition["tool"]) and not run.verified_criteria.get(
-            precondition["requires"], False
-        ):
-            violations.append(precondition["violation"])
-
-    passed = complete and not violations
-    run.validation_status = "passed" if passed else "failed"
+    ceiling = token_ceiling(run)
+    loop_total = loop_tokens_used(run)
     return {
-        "passed": passed,
-        "missing_criteria": missing,
-        "violations": violations,
-        "checked_reply_chars": len(reply.strip()),
-        "tool_calls_checked": len(run.tool_history),
+        "loop_total_tokens": loop_total,
+        "loop_generated_tokens": run.output_tokens,
+        "auxiliary_generated_tokens": run.auxiliary_output_tokens,
+        "total_generated_tokens": run.output_tokens + run.auxiliary_output_tokens,
+        "loop_input_tokens": run.input_tokens,
+        "auxiliary_input_tokens": run.auxiliary_input_tokens,
+        "total_input_tokens": run.input_tokens + run.auxiliary_input_tokens,
+        "peak_call_input_tokens": run.peak_call_input_tokens,
+        "token_budget": ceiling,
+        "base_token_budget": run.token_budget,
+        "budget_grants": run.budget_grants,
+        "budget_used_percent": (
+            round(100 * loop_total / ceiling) if ceiling else 100
+        ),
+        "model_calls": len(run.model_call_usage),
+        "model_call_usage": run.model_call_usage,
+        "tool_calls": run.tool_call_count,
+        "compact_at_tokens": run.compact_at_tokens,
+        "compactions": run.compactions,
     }
 
 
-def validation_feedback(result: dict[str, Any]) -> str:
-    issues = [
-        *(f"missing:{item}" for item in result.get("missing_criteria", [])),
-        *(f"violation:{item}" for item in result.get("violations", [])),
-    ]
-    return ", ".join(issues) or "validation_failed"
+def add_auxiliary(run: RunState, usage: TokenSplit) -> None:
+    """Record one harness-side model call: reported, never metered."""
+    run.auxiliary_input_tokens += usage.input_tokens
+    run.auxiliary_output_tokens += usage.output_tokens
+
+
+def token_ceiling(run: RunState) -> int:
+    """Total loop tokens this session may spend."""
+    return run.token_budget * (1 + run.budget_grants)
+
+
+def loop_tokens_used(run: RunState) -> int:
+    """Input plus output used by the agent loop, excluding harness-side calls."""
+    return run.input_tokens + run.output_tokens
+
+
+def grant_budget(run: RunState) -> int:
+    """Extend the task's ceiling by one more grant. Returns the new ceiling.
+
+    Called only when a human has approved the extension. The model cannot
+    reach this, which is the whole point of putting the decision here.
+    """
+    run.budget_grants += 1
+    return token_ceiling(run)
+
+
+def token_warning_threshold(run: RunState) -> int:
+    """Total-token count at which the graceful guard stops starting new work."""
+    return max(1, floor(token_ceiling(run) * run.budget_warning_ratio))
 
 
 def context_snapshot(

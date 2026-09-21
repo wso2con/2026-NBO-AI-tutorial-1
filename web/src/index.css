@@ -28,13 +28,22 @@
     --ring: 222.2 47% 11%;
     --radius: 0.75rem;
 
-    /* Agent identity. Amber = v1 ("first cut, watch out"); emerald = v2
+    /* Agent identity. Amber = first-cut ("watch out"); emerald = engineered
        ("hardened"). Used as a 2-px top stripe + status dot on each panel
        so the audience can tell the columns apart without reading labels. */
-    --v1: 25 92% 53%;
-    --v1-foreground: 0 0% 100%;
-    --v2: 158 64% 42%;
-    --v2-foreground: 0 0% 100%;
+    --first-cut: 25 92% 53%;
+    --first-cut-foreground: 0 0% 100%;
+    --engineered: 158 64% 42%;
+    --engineered-foreground: 0 0% 100%;
+
+    /* Syntax colors for the JSON / code viewers. Tuned to stay legible on a
+       projector: high contrast against --card, distinct in hue, never neon. */
+    --code-key: 222 47% 25%;
+    --code-string: 158 64% 32%;
+    --code-number: 25 85% 42%;
+    --code-bool: 262 60% 50%;
+    --code-null: 215 16% 50%;
+    --code-punct: 215 16% 55%;
   }
 
   .dark {
@@ -60,10 +69,17 @@
     --input: 215 28% 20%;
     --ring: 217 14% 70%;
 
-    --v1: 30 95% 60%;
-    --v1-foreground: 224 71% 4%;
-    --v2: 158 60% 52%;
-    --v2-foreground: 224 71% 4%;
+    --first-cut: 30 95% 60%;
+    --first-cut-foreground: 224 71% 4%;
+    --engineered: 158 60% 52%;
+    --engineered-foreground: 224 71% 4%;
+
+    --code-key: 210 30% 86%;
+    --code-string: 158 60% 58%;
+    --code-number: 30 90% 65%;
+    --code-bool: 265 80% 78%;
+    --code-null: 217 14% 60%;
+    --code-punct: 217 14% 55%;
   }
 
   * {

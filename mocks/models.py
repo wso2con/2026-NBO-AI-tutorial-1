@@ -32,6 +32,12 @@ class Order(BaseModel):
     estimated_delivery: str | None = None
     delivery_days_late: int = 0
     damaged: bool = False
+    # Damage photos the customer has already filed against this order, as
+    # stored references. This is the backend's own record of evidence, not
+    # something the agent can assert: the damaged-item policy requires photo
+    # evidence, and `issue_refund(reason_code="damaged")` reads this list to
+    # decide whether that requirement is met. Empty means no evidence on file.
+    damage_photos: list[str] = []
     payment_method: str = ""
 
 

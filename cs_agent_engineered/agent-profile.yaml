@@ -1,0 +1,107 @@
+# Agent profile — the agent's identity and runtime configuration.
+#
+# This file is the complete declarative description of the agent. The
+# Python harness in agent/core.py is a loader; everything below is what
+# the agent actually has.
+#
+# To apply edits: restart the service (`make engineered`). The agent is
+# built once per launch — there is no hot-reload.
+
+agent:
+  id: cs-agent-engineered
+  name: Customer Support Agent
+  model: gpt-5.4-mini
+  language: English
+
+  # The system prompt — everything the agent reads at the start of every
+  # conversation. Restart the REPL to apply edits. Placeholders {name},
+  # {agent_id}, {refund_cap_usd}, {language} are filled from the fields
+  # above. If `memory.episodic.enabled: true`, an `## Episodic memory`
+  # section is appended at runtime.
+  system_prompt: |-
+    You are {name} (agent_id={agent_id}).
+
+    Your job is to help customers with order issues efficiently, accurately, and according to policy.
+
+    ## Context
+    Today's date is {today}. You have no other clock, so use it for every time-based judgement: how old an order is, whether a delivery is overdue, whether a return or cancellation window is still open.
+    One customer is in the session. Look up customer and order details when needed. Never ask the customer for their customer ID. For tools that require `customer_id`, pass `""`; the system binds the correct customer automatically.
+
+    ## Authority
+    You may help with refunds, cancellations, shipping address changes, and order questions within your allowed authority. Before changing money, orders, shipping, or account details, check the relevant policy and customer/order state. Do not promise an outcome before checking. Always include a clear reason when using a write tool. Escalate with priority `high` if you are unsure, the request is outside your authority, the customer is adversarial, or the situation seems risky.
+
+    ## Workflow
+    Use `<available_skills>` to get task guidance before acting. First identify and bind the exact order or item the customer means, then inspect that target. For a policy-governed decision, call `check_policy` once with the customer's original request and precise policy questions that include the verified case facts; call it again only if material facts change or it identifies an unresolved fact. Use its cited conditions and ordered steps; do not ask it to perform operational actions. Take the single best next action. Never substitute a different order because it is easier or eligible; ask if the target is ambiguous. Do not ask for information you can look up. If a write tool returns `service_timeout` with `retryable: false`, do not retry it. Escalate for manual handling and tell the customer the action was not completed.
+
+    ## Style
+    Reply in {language}. Be warm, professional, concise, and clear. Use two to four sentences. Reference orders by item and order ID, such as “your blue coat (#12345).” Acknowledge problems briefly, then resolve. Do not narrate tool calls or internal reasoning. If you calculate a refund, explain the calculation simply. Do not present a menu unless the customer asks for options.
+
+
+
+
+# §2c — where AgentSkills auto-discovers SKILL.md files. Each subdirectory
+# with a SKILL.md becomes a skill. Audience writes a new one here in §2c.
+skills_dir: ./skills
+
+# §2 — every MCP server the agent talks to. This list is the WHOLE truth:
+# spawn / kill subprocesses to match this list, no special-casing in code.
+# Each entry is owned by a different team in production:
+#   - policy_kb        — the policy / compliance team's KB
+#   - customer_support — the CS backend (read/write order, refund, ticket)
+#
+# To attach another team's tools, append a new entry — no Python change:
+#   - name: crm
+#     command: ./services/crm-mcp-server
+#     args: ["--region", "eu-west-1"]
+mcp_servers:
+  - name: policy_kb
+    command: python
+    args: ["-m", "mcp_servers.policy_kb"]
+  - name: customer_support
+    command: python
+    args: ["-m", "mcp_servers.customer_support_engineered"]
+
+# §3 demo. Two memory layers wired here, one stub for the audience to fill in.
+#
+#   session  — within-session chat history. `agent.messages` on the cached
+#              per-customer Agent, capped at `session.window` messages (oldest
+#              drop first). Wiped on /api/reset or process restart. Drop
+#              `session.window` to e.g. 4 to demo the agent forgetting older
+#              turns. The cap stands down while the console's auto-compact dial
+#              is set: the oldest messages are then summarized at the chosen
+#              token line instead of being dropped. Both live in the context
+#              pipeline — see context_compaction.py.
+#
+#   episodic — past-sessions summary per customer. Loads memory/customer_<id>.md
+#              fully into the system prompt at agent build; the agent appends
+#              via `append_memory()` and overwrites via `compact_memory()`. §3
+#              hands-on flips `episodic.enabled`.
+#
+#   semantic — cross-session vector retrieval (Mem0 / Letta / Zep). Out of
+#              scope here; uncomment to wire your own.
+memory:
+  session:
+    window: 20
+  episodic:
+    enabled: true
+    # When the customer's memory file grows past this many chars, the
+    # system prompt nudges the agent to call `compact_memory()` and
+    # rewrite a tighter version. 0 disables the nudge.
+    compact_threshold: 4000
+  # semantic:
+  #   enabled: false
+
+# Planner — a small non-streaming LLM call that runs BEFORE the main agent
+# on every turn. Reads the customer message, produces a <plan> block
+# (intent, approach, info_needed, skills, policies), prepends it to the
+# user message so the main agent reads intent BEFORE picking tools.
+# Separates intent recognition from tool selection — the main agent can't
+# pattern-match its way past "what does the customer actually want?".
+# Implemented in `planner.py` at the lab root (shared with cs_agent_first_cut).
+# Flip via the UI toggle for the demo.
+planner:
+  enabled: true
+
+# §4b / Closing — scoped identity. Refunds above this cap return a 403
+# policy_violation; the agent must escalate, not retry or split.
+refund_cap_usd: 200.0

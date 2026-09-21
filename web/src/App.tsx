@@ -1,34 +1,37 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { BookOpen, Hourglass, RotateCcw, Sparkles, FlaskConical } from "lucide-react";
+import { BookOpen, Hourglass, RotateCcw, Sparkles, WifiOff } from "lucide-react";
 import {
   AGENTS,
   DEFAULT_MODEL,
   SUPPORTED_MODELS,
   endSession,
+  fetchSession,
   fetchTools,
   runAgent,
+  stopPausedTask,
   resetAgent,
-  runEvaluationSuite,
   type AgentService,
   type AgentTool,
   type SupportedModel,
-  type EvaluationSuite,
 } from "@/lib/api";
 import {
   emptyAgentState,
   newTurn,
+  restoredTurn,
   type AgentEvent,
   type AgentState,
   type AgentVariant,
+  type EvaluationAspect,
   type Turn,
+  type TurnEvaluation,
 } from "@/lib/types";
 import { AgentPanel } from "@/components/AgentPanel";
 import { Composer } from "@/components/Composer";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
-import { EvaluationPanel } from "@/components/EvaluationPanel";
 import { ScenariosPanel } from "@/components/ScenariosPanel";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
 import type { DemoScenario, ScenarioPrompt } from "@/lib/scenarios";
 import {
   Select,
@@ -44,33 +47,71 @@ const CUSTOMERS = [
   { id: "cust_003", label: "Carol · cust_003" },
 ];
 
-const DEFAULT_TOOL_BUDGET = 12;
-const TOOL_BUDGET_OPTIONS = [3, 4, 5, 8, 10, 12];
+// Session budget for the agent loop's total provider usage (input + output).
+// Harness-side planner/reviewer calls and the policy MCP's one-time lookup are
+// deliberately outside this number.
+const DEFAULT_TOKEN_BUDGET = 40000;
+const TOKEN_BUDGET_OPTIONS = [4000, 8000, 16000, 40000, 80000, 160000];
+
+// engineered only. The line at which the harness summarizes the oldest
+// messages instead of letting the next call's context keep growing, measured
+// in the same projected input tokens the context bars are drawn in. 0 is off.
+// The options start above the agent's own fixed surface (system prompt + tool
+// contracts, a few thousand tokens): a line below that can never be met, so
+// offering one would only compact on every call and save nothing.
+const DEFAULT_COMPACT_AT = 0;
+const COMPACT_AT_OPTIONS = [0, 8000, 12000, 20000, 40000];
+
+function resultIsError(result: unknown): boolean {
+  if (result && typeof result === "object" && !Array.isArray(result)) {
+    return "error" in result;
+  }
+  if (typeof result !== "string") return false;
+  const lowered = result.toLowerCase();
+  if (lowered.includes("error executing tool") || lowered.includes("service_timeout")) {
+    return true;
+  }
+  try {
+    const parsed = JSON.parse(result) as unknown;
+    return Boolean(parsed && typeof parsed === "object" && !Array.isArray(parsed) && "error" in parsed);
+  } catch {
+    return false;
+  }
+}
+
+function newRunId() {
+  return typeof crypto !== "undefined" && "randomUUID" in crypto
+    ? crypto.randomUUID()
+    : `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+}
 
 export default function App() {
   const [customerId, setCustomerId] = useState<string>("cust_001");
   const [selectedModel, setSelectedModel] = useState<SupportedModel>(DEFAULT_MODEL);
-  const [toolBudget, setToolBudget] = useState(DEFAULT_TOOL_BUDGET);
+  const [tokenBudget, setTokenBudget] = useState(DEFAULT_TOKEN_BUDGET);
+  const [compactAt, setCompactAt] = useState(DEFAULT_COMPACT_AT);
   // Composer text lives in App so the Scenarios panel can pre-fill it on click.
   const [composerText, setComposerText] = useState("");
   const [scenariosOpen, setScenariosOpen] = useState(false);
   const [selectedScenarioId, setSelectedScenarioId] = useState<string | null>(null);
   const [scenarioRunId, setScenarioRunId] = useState<string | null>(null);
-  const [v1, setV1] = useState<AgentState>(emptyAgentState);
-  const [v2, setV2] = useState<AgentState>(emptyAgentState);
-  // v2-only feature toggles. `skills` / `episodic` default OFF so the v2
+  const [chatRunId, setChatRunId] = useState(newRunId);
+  const [refundServiceTimeout, setRefundServiceTimeout] = useState(false);
+  const [firstCut, setFirstCut] = useState<AgentState>(emptyAgentState);
+  const [engineered, setEngineered] = useState<AgentState>(emptyAgentState);
+  // engineered-only feature toggles. `skills` / `episodic` default OFF so the engineered
   // panel starts as a bare-bones agent; the presenter flips them on during
   // the demo to show the lift each feature provides. Flipping skills or
-  // episodic is destructive (rebuilds the agent) and triggers a full v2
+  // episodic is destructive (rebuilds the agent) and triggers a full engineered
   // reset; `planner` is a per-request decision (the planner is a separate
   // LLM call, not part of the agent build) and flips freely without reset.
-  const [v2SkillsEnabled, setV2SkillsEnabled] = useState(false);
-  const [v2EpisodicEnabled, setV2EpisodicEnabled] = useState(false);
-  const [v2PlannerEnabled, setV2PlannerEnabled] = useState(false);
-  // v1's planner uses the same shared `planner.py` module as v2. v1 has
+  const [engineeredSkillsEnabled, setEngineeredSkillsEnabled] = useState(false);
+  const [engineeredEpisodicEnabled, setEngineeredEpisodicEnabled] = useState(false);
+  const [engineeredPlannerEnabled, setEngineeredPlannerEnabled] = useState(false);
+  // first-cut's planner uses the same shared `planner.py` module as engineered. first-cut has
   // no skills loader, so the planner always runs with skills_enabled=false.
-  // Independent of v2's toggle — flip per panel.
-  const [v1PlannerEnabled, setV1PlannerEnabled] = useState(false);
+  // Independent of engineered's toggle — flip per panel.
+  const [firstCutPlannerEnabled, setFirstCutPlannerEnabled] = useState(false);
   // Holds the toggle the user is mid-flipping while the confirm dialog is
   // up. Cleared on confirm or cancel. Only `skills` / `episodic` need this
   // — planner has no rebuild and skips the dialog entirely.
@@ -79,76 +120,113 @@ export default function App() {
   >(null);
   // Tool catalog per agent — fetched once on mount. Tools don't change
   // between requests, so we don't refetch on send/reset.
-  const [v1Tools, setV1Tools] = useState<AgentTool[]>([]);
-  const [v2Tools, setV2Tools] = useState<AgentTool[]>([]);
+  const [firstCutTools, setFirstCutTools] = useState<AgentTool[]>([]);
+  const [engineeredTools, setEngineeredTools] = useState<AgentTool[]>([]);
   // Counter the MemoryDrawer watches to know when to refetch the file.
-  // Bumped after a v2 turn finishes, after reset, and after next-session.
-  const [v2MemoryRefreshKey, setV2MemoryRefreshKey] = useState(0);
+  // Bumped after a engineered turn finishes, after reset, and after next-session.
+  const [engineeredMemoryRefreshKey, setEngineeredMemoryRefreshKey] = useState(0);
   const bumpV2Memory = useCallback(
-    () => setV2MemoryRefreshKey((k) => k + 1),
+    () => setEngineeredMemoryRefreshKey((k) => k + 1),
     [],
   );
-  const [v1ToolsLoading, setV1ToolsLoading] = useState(true);
-  const [v2ToolsLoading, setV2ToolsLoading] = useState(true);
-  const [v1ToolsError, setV1ToolsError] = useState<string | null>(null);
-  const [v2ToolsError, setV2ToolsError] = useState<string | null>(null);
+  const [firstCutToolsLoading, setFirstCutToolsLoading] = useState(true);
+  const [engineeredToolsLoading, setEngineeredToolsLoading] = useState(true);
+  // System prompts come from /api/tools alongside the tool list — both are
+  // agent properties, not per-turn run output.
+  const [firstCutSystemPrompt, setFirstCutSystemPrompt] = useState("");
+  const [engineeredSystemPrompt, setEngineeredSystemPrompt] = useState("");
+  const [firstCutToolsError, setFirstCutToolsError] = useState<string | null>(null);
+  const [engineeredToolsError, setEngineeredToolsError] = useState<string | null>(null);
   const [resetMsg, setResetMsg] = useState<string | null>(null);
-  const [evaluation, setEvaluation] = useState<EvaluationSuite | null>(null);
   const abortRef = useRef<AbortController | null>(null);
 
-  // v1 tools are static — fetch once at mount.
+  // Rehydrate each panel's thread from the agent's own session memory.
+  // The console's copy of the conversation lives in React state, so a browser
+  // refresh drops it while the agent still holds everything; this reads the
+  // thread back from `agent.messages`. Runs at mount and whenever the
+  // customer changes (engineered keeps one agent per customer), and never
+  // while a turn is streaming, so it can't clobber live state.
   useEffect(() => {
     let cancelled = false;
-    fetchTools(AGENTS.v1)
-      .then((tools) => {
+    const restore = async (
+      variant: AgentVariant,
+      setter: typeof setFirstCut,
+    ) => {
+      try {
+        const turns = await fetchSession(AGENTS[variant], customerId);
         if (cancelled) return;
-        setV1Tools(tools);
-        setV1ToolsError(null);
+        setter((prev) =>
+          prev.turns.some((t) => t.status === "running")
+            ? prev
+            : { ...prev, turns: turns.map(restoredTurn) },
+        );
+      } catch {
+        // A service that is down or predates /api/session simply leaves the
+        // panel as it is — an empty thread is the correct fallback.
+      }
+    };
+    void restore("first_cut", setFirstCut);
+    void restore("engineered", setEngineered);
+    return () => {
+      cancelled = true;
+    };
+  }, [customerId]);
+
+  // first-cut tools are static — fetch once at mount.
+  useEffect(() => {
+    let cancelled = false;
+    fetchTools(AGENTS.first_cut)
+      .then((catalog) => {
+        if (cancelled) return;
+        setFirstCutTools(catalog.tools);
+        setFirstCutSystemPrompt(catalog.systemPrompt);
+        setFirstCutToolsError(null);
       })
       .catch((err) => {
         if (cancelled) return;
-        setV1ToolsError(err instanceof Error ? err.message : String(err));
+        setFirstCutToolsError(err instanceof Error ? err.message : String(err));
       })
       .finally(() => {
         if (cancelled) return;
-        setV1ToolsLoading(false);
+        setFirstCutToolsLoading(false);
       });
     return () => {
       cancelled = true;
     };
   }, []);
 
-  // v2 tools depend on the feature toggles — refetch whenever they flip so
+  // engineered tools depend on the feature toggles — refetch whenever they flip so
   // the drawer matches what the agent actually has registered.
   useEffect(() => {
     let cancelled = false;
-    setV2ToolsLoading(true);
-    fetchTools(AGENTS.v2, {
-      skills_enabled: v2SkillsEnabled,
-      episodic_enabled: v2EpisodicEnabled,
+    setEngineeredToolsLoading(true);
+    fetchTools(AGENTS.engineered, {
+      skills_enabled: engineeredSkillsEnabled,
+      episodic_enabled: engineeredEpisodicEnabled,
     })
-      .then((tools) => {
+      .then((catalog) => {
         if (cancelled) return;
-        setV2Tools(tools);
-        setV2ToolsError(null);
+        setEngineeredTools(catalog.tools);
+        setEngineeredSystemPrompt(catalog.systemPrompt);
+        setEngineeredToolsError(null);
       })
       .catch((err) => {
         if (cancelled) return;
-        setV2ToolsError(err instanceof Error ? err.message : String(err));
+        setEngineeredToolsError(err instanceof Error ? err.message : String(err));
       })
       .finally(() => {
         if (cancelled) return;
-        setV2ToolsLoading(false);
+        setEngineeredToolsLoading(false);
       });
     return () => {
       cancelled = true;
     };
-  }, [v2SkillsEnabled, v2EpisodicEnabled]);
+  }, [engineeredSkillsEnabled, engineeredEpisodicEnabled]);
 
   const setters = useMemo(
     (): Record<AgentVariant, React.Dispatch<React.SetStateAction<AgentState>>> => ({
-      v1: setV1,
-      v2: setV2,
+      first_cut: setFirstCut,
+      engineered: setEngineered,
     }),
     [],
   );
@@ -157,7 +235,7 @@ export default function App() {
     const last = s.turns[s.turns.length - 1];
     return last?.status === "running";
   };
-  const anyRunning = lastTurnRunning(v1) || lastTurnRunning(v2);
+  const anyRunning = lastTurnRunning(firstCut) || lastTurnRunning(engineered);
 
   const updateTurn = useCallback(
     (variant: AgentVariant, turnId: string, updater: (t: Turn) => Turn) => {
@@ -182,18 +260,24 @@ export default function App() {
           updateTurn(variant, turnId, (t) => ({ ...t, plan: ev.content }));
           break;
         case "tool_call":
-          updateTurn(variant, turnId, (t) => ({
-            ...t,
-            trace: [
-              ...t.trace,
-              {
-                tool_use_id: ev.tool_use_id,
-                name: ev.name,
-                args: ev.args,
-                args_summary: ev.args_summary,
-              },
-            ],
-          }));
+          updateTurn(variant, turnId, (t) => {
+            const row = {
+              tool_use_id: ev.tool_use_id,
+              name: ev.name,
+              args: ev.args,
+              args_summary: ev.args_summary,
+            };
+            // A resumed turn re-announces the calls that were still in flight
+            // when it paused, so its trace reads on its own. Those rows are
+            // already here — replace rather than append, or an approved write
+            // shows up twice.
+            const at = t.trace.findIndex((r) => r.tool_use_id === ev.tool_use_id);
+            if (at === -1) return { ...t, trace: [...t.trace, row] };
+            return {
+              ...t,
+              trace: t.trace.map((r, i) => (i === at ? { ...r, ...row } : r)),
+            };
+          });
           break;
         case "tool_result":
           updateTurn(variant, turnId, (t) => ({
@@ -204,7 +288,10 @@ export default function App() {
                     ...r,
                     result: ev.result,
                     result_summary: ev.result_summary,
-                    is_error: ev.is_error,
+                    // MCP can successfully transport a domain-level failure.
+                    // Treat structured {error: ...} results as failed tool
+                    // calls even when the protocol-level status is success.
+                    is_error: ev.is_error || resultIsError(ev.result),
                   }
                 : r,
             ),
@@ -221,10 +308,12 @@ export default function App() {
             ...t,
             status: "done",
             final_reply: ev.final_reply || t.streaming_reply,
+            usage: ev.usage ?? t.usage,
+            pause: ev.pause ?? t.pause,
           }));
-          // The v2 agent may have appended to its episodic memory file
+          // The engineered agent may have appended to its episodic memory file
           // during this turn; nudge the MemoryDrawer to refetch.
-          if (variant === "v2") bumpV2Memory();
+          if (variant === "engineered") bumpV2Memory();
           break;
         case "error":
           updateTurn(variant, turnId, (t) => ({
@@ -242,17 +331,76 @@ export default function App() {
         case "task_contract":
         case "llm_decision":
         case "action_selection":
+        case "human_approval":
+        case "context_compacted":
         case "state_transition":
         case "loop_decision":
         case "recovery":
         case "reconciliation":
-        case "validation":
         case "completion":
-        case "evaluation":
           updateTurn(variant, turnId, (t) => ({
             ...t,
             run_id: ev.run_id,
             loop_events: [...t.loop_events, ev],
+          }));
+          break;
+
+        // The post-turn review. These land after `done`, so the turn is
+        // already marked complete and the reply is already rendered — they
+        // only fill in the chip beside it.
+        case "evaluation_started":
+          updateTurn(variant, turnId, (t) => ({
+            ...t,
+            run_id: ev.run_id,
+            loop_events: [...t.loop_events, ev],
+            evaluation: {
+              status: "pending",
+              expected: Array.isArray(ev.aspects)
+                ? (ev.aspects as TurnEvaluation["expected"])
+                : [],
+              aspects: [],
+            },
+          }));
+          break;
+        case "evaluation_aspect":
+          updateTurn(variant, turnId, (t) => {
+            const incoming = ev.evaluation as EvaluationAspect | undefined;
+            if (!incoming) return t;
+            const previous = t.evaluation ?? {
+              status: "pending" as const,
+              expected: [],
+              aspects: [],
+            };
+            return {
+              ...t,
+              run_id: ev.run_id,
+              loop_events: [...t.loop_events, ev],
+              evaluation: {
+                ...previous,
+                // Aspects complete out of order, and a redelivered frame must
+                // not double up, so replace by key rather than append blindly.
+                aspects: [
+                  ...previous.aspects.filter((a) => a.aspect !== incoming.aspect),
+                  incoming,
+                ],
+              },
+            };
+          });
+          break;
+        case "evaluation_complete":
+          updateTurn(variant, turnId, (t) => ({
+            ...t,
+            run_id: ev.run_id,
+            loop_events: [...t.loop_events, ev],
+            usage: (ev.usage as Turn["usage"]) ?? t.usage,
+            evaluation: {
+              status: "complete",
+              verdict: ev.verdict as TurnEvaluation["verdict"],
+              expected: t.evaluation?.expected ?? [],
+              aspects: Array.isArray(ev.aspects)
+                ? (ev.aspects as EvaluationAspect[])
+                : (t.evaluation?.aspects ?? []),
+            },
           }));
           break;
       }
@@ -260,22 +408,134 @@ export default function App() {
     [updateTurn],
   );
 
+  /** Answer the inline pause on a turn that is holding work behind a human
+   *  decision. Both kinds resume the SAME run on the agent that paused, and
+   *  the other column's turn is finished and must not be replayed.
+   *
+   *  - budget: "Continue" grants more tokens and resumes the loop, adding
+   *    nothing to the conversation. "Stop" drops the pause server side and
+   *    runs nothing. It ends one turn and starts another, so it gets a turn
+   *    of its own in the thread.
+   *  - write confirmation: the loop is parked mid-tool-call, inside the turn
+   *    already on screen. The decision goes back as structured data on the
+   *    parked interrupts — the conversation the model reads never gains a
+   *    question or an answer — so the turn simply continues where it stopped
+   *    instead of a new exchange appearing in the chat. `decisions` carries
+   *    one answer per queued write; approving one write never resumes
+   *    another. */
+  async function answerPause(
+    variant: AgentVariant,
+    turn: Turn,
+    approved: boolean,
+    decisions?: Record<string, boolean>,
+  ) {
+    const pause = turn.pause;
+    if (!pause) return;
+    const isBudget = pause.code === "budget_grant_required";
+    updateTurn(variant, turn.id, (t) =>
+      isBudget
+        ? { ...t, pause_answered: approved ? "confirmed" : "rejected" }
+        : {
+            ...t,
+            // The question is answered, so it stops being a pending pause and
+            // becomes part of the turn's record. Appending rather than
+            // replacing matters because a resumed turn can queue another write
+            // and arrive with a fresh `pause`, which must not erase what the
+            // customer already authorised.
+            pause: undefined,
+            approvals: [
+              ...(t.approvals ?? []),
+              ...(pause.awaiting ?? []).map((write) => ({
+                write,
+                approved: Boolean(decisions?.[write.id]),
+              })),
+            ],
+          },
+    );
+
+    const svc = variant === "engineered" ? AGENTS.engineered : AGENTS.first_cut;
+
+    if (isBudget && !approved) {
+      void stopPausedTask(svc, {
+        customer_id: customerId,
+        run_id: pause.run_id,
+      }).catch(() => undefined);
+      return;
+    }
+    if (anyRunning) return;
+
+    // A budget continuation is a fresh exchange in the thread. A write
+    // confirmation is not: it resumes the turn the customer is looking at, so
+    // its events stream back into that same card.
+    const setState = variant === "engineered" ? setEngineered : setFirstCut;
+    let streamTurnId = turn.id;
+    let prompt = "";
+    if (isBudget) {
+      // Label only. The server takes the decision from the structured field
+      // and adds no message to the conversation at all.
+      prompt = `Continue (+${(pause.grant_tokens ?? 0).toLocaleString()} total tokens)`;
+      const nextTurn = { ...newTurn(prompt), run_id: pause.run_id };
+      streamTurnId = nextTurn.id;
+      setState((s) => ({ ...s, turns: [...s.turns, nextTurn] }));
+    } else {
+      updateTurn(variant, turn.id, (t) => ({
+        ...t,
+        status: "running",
+        streaming_reply: "",
+        final_reply: "",
+        error: null,
+      }));
+    }
+
+    const controller = new AbortController();
+    abortRef.current = controller;
+    try {
+      await runAgent(svc, {
+        prompt,
+        customer_id: customerId,
+        model: selectedModel,
+        run_id: pause.run_id,
+        token_budget: tokenBudget,
+        ...(isBudget
+          ? { budget_grant: true }
+          : decisions
+            ? { confirm_decisions: decisions }
+            : { confirm: approved }),
+        ...(variant === "engineered"
+          ? {
+              skills_enabled: engineeredSkillsEnabled,
+              episodic_enabled: engineeredEpisodicEnabled,
+              planner_enabled: engineeredPlannerEnabled,
+              compact_at: compactAt,
+            }
+          : { planner_enabled: firstCutPlannerEnabled }),
+        signal: controller.signal,
+        onEvent: handleEvent(variant, streamTurnId),
+      });
+      updateTurn(variant, streamTurnId, (t) =>
+        t.status === "running" ? { ...t, status: "done" } : t,
+      );
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      updateTurn(variant, streamTurnId, (t) => ({ ...t, status: "error", error: message }));
+    }
+  }
+
   async function send(prompt: string) {
     if (anyRunning) return;
 
     // Append a new turn to each ENABLED agent. Disabled ones simply skip.
-    const freshRunId =
-      typeof crypto !== "undefined" && "randomUUID" in crypto
-        ? crypto.randomUUID()
-        : `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
-    const comparisonRunId = selectedScenarioId && scenarioRunId ? scenarioRunId : freshRunId;
-    const v1Turn = v1.enabled ? { ...newTurn(prompt), run_id: comparisonRunId } : null;
-    const v2Turn = v2.enabled ? { ...newTurn(prompt), run_id: comparisonRunId } : null;
+    // Reuse one run id across messages in the same visible chat. That makes
+    // the usage meter cumulative in exactly the same way as conversation
+    // memory; reset/end-session/customer switch starts a new meter.
+    const comparisonRunId = selectedScenarioId && scenarioRunId ? scenarioRunId : chatRunId;
+    const firstCutTurn = firstCut.enabled ? { ...newTurn(prompt), run_id: comparisonRunId } : null;
+    const engineeredTurn = engineered.enabled ? { ...newTurn(prompt), run_id: comparisonRunId } : null;
 
-    if (!v1Turn && !v2Turn) return; // both off → nothing to do
+    if (!firstCutTurn && !engineeredTurn) return; // both off → nothing to do
 
-    if (v1Turn) setV1((s) => ({ ...s, turns: [...s.turns, v1Turn] }));
-    if (v2Turn) setV2((s) => ({ ...s, turns: [...s.turns, v2Turn] }));
+    if (firstCutTurn) setFirstCut((s) => ({ ...s, turns: [...s.turns, firstCutTurn] }));
+    if (engineeredTurn) setEngineered((s) => ({ ...s, turns: [...s.turns, engineeredTurn] }));
     setResetMsg(null);
 
     const controller = new AbortController();
@@ -288,15 +548,17 @@ export default function App() {
           customer_id: customerId,
           model: selectedModel,
           run_id: comparisonRunId,
-          tool_budget: toolBudget,
-          ...(variant === "v2"
+          token_budget: tokenBudget,
+          refund_service_timeout: refundServiceTimeout,
+          ...(variant === "engineered"
             ? {
-                skills_enabled: v2SkillsEnabled,
-                episodic_enabled: v2EpisodicEnabled,
-                planner_enabled: v2PlannerEnabled,
+                skills_enabled: engineeredSkillsEnabled,
+                episodic_enabled: engineeredEpisodicEnabled,
+                planner_enabled: engineeredPlannerEnabled,
+                compact_at: compactAt,
               }
             : {
-                planner_enabled: v1PlannerEnabled,
+                planner_enabled: firstCutPlannerEnabled,
               }),
           signal: controller.signal,
           onEvent: handleEvent(variant, turnId),
@@ -312,27 +574,34 @@ export default function App() {
       }
     };
 
-    // Kick off v2 first — v2 has the MCP-subprocess spawn cost and the
+    // Kick off engineered first — engineered has the MCP-subprocess spawn cost and the
     // AgentSkills injection on first request, so it's slower to issue the
-    // first SSE chunk. v1 fires immediately after; both still stream
+    // first SSE chunk. first-cut fires immediately after; both still stream
     // concurrently, but the head start helps the two columns finish
     // visually in sync on the projector.
     const launches: Promise<void>[] = [];
-    if (v2Turn) launches.push(launch(AGENTS.v2, "v2", v2Turn.id));
-    if (v1Turn) launches.push(launch(AGENTS.v1, "v1", v1Turn.id));
+    if (engineeredTurn) launches.push(launch(AGENTS.engineered, "engineered", engineeredTurn.id));
+    if (firstCutTurn) launches.push(launch(AGENTS.first_cut, "first_cut", firstCutTurn.id));
+    // The UI switch arms one comparison run. Each backend keeps its own
+    // one-shot fault armed until a qualifying refund consumes it.
+    if (refundServiceTimeout) setRefundServiceTimeout(false);
     await Promise.allSettled(launches);
   }
 
   async function reset() {
     abortRef.current?.abort();
     // Clear chat history on both columns but keep their enabled toggles.
-    setV1((s) => ({ ...s, turns: [] }));
-    setV2((s) => ({ ...s, turns: [] }));
-    setToolBudget(DEFAULT_TOOL_BUDGET);
+    setFirstCut((s) => ({ ...s, turns: [] }));
+    setEngineered((s) => ({ ...s, turns: [] }));
+    setChatRunId(newRunId());
+    setScenarioRunId(null);
+    setRefundServiceTimeout(false);
+    setTokenBudget(DEFAULT_TOKEN_BUDGET);
+    setCompactAt(DEFAULT_COMPACT_AT);
     setResetMsg("resetting…");
     try {
-      await Promise.all([resetAgent(AGENTS.v1), resetAgent(AGENTS.v2)]);
-      // /api/reset wipes v2's non-seed episodic-memory files, so the
+      await Promise.all([resetAgent(AGENTS.first_cut), resetAgent(AGENTS.engineered)]);
+      // /api/reset wipes engineered's non-seed episodic-memory files, so the
       // drawer's cached content is stale.
       bumpV2Memory();
       setResetMsg("both agents reset");
@@ -346,13 +615,13 @@ export default function App() {
     setters[variant]((s) => ({ ...s, enabled: !s.enabled }));
   }
 
-  /** Stage a v2 feature toggle behind the confirm dialog. Because skills
+  /** Stage a engineered feature toggle behind the confirm dialog. Because skills
    *  and episodic memory are baked into the agent at build time
    *  (system_prompt / tools / plugins), the cached agent no longer matches
-   *  the new toggle — so flipping requires a full v2 reset. */
+   *  the new toggle — so flipping requires a full engineered reset. */
   function toggleV2Feature(feature: "skills" | "episodic") {
     if (anyRunning) return;
-    const current = feature === "skills" ? v2SkillsEnabled : v2EpisodicEnabled;
+    const current = feature === "skills" ? engineeredSkillsEnabled : engineeredEpisodicEnabled;
     setPendingV2Toggle({ feature, next: !current });
   }
 
@@ -363,21 +632,25 @@ export default function App() {
     const { feature, next } = pendingV2Toggle;
     setPendingV2Toggle(null);
 
-    if (feature === "skills") setV2SkillsEnabled(next);
-    else setV2EpisodicEnabled(next);
+    if (feature === "skills") setEngineeredSkillsEnabled(next);
+    else setEngineeredEpisodicEnabled(next);
 
     await reset();
   }
 
   /** Simulate "time has passed" for the episodic-memory demo. Both agents'
    *  cached Agent is dropped (server-side and client-side conversation
-   *  memory wiped), but v2's episodic memory file on disk persists. A
+   *  memory wiped), but engineered's episodic memory file on disk persists. A
    *  divider is appended in each panel's thread to mark the boundary. */
   async function nextSession() {
     if (anyRunning) return;
-    setToolBudget(DEFAULT_TOOL_BUDGET);
+    setTokenBudget(DEFAULT_TOKEN_BUDGET);
+    setCompactAt(DEFAULT_COMPACT_AT);
+    setChatRunId(newRunId());
+    setScenarioRunId(null);
+    setRefundServiceTimeout(false);
     // Mark a divider after the last turn in each enabled panel.
-    setV1((s) => {
+    setFirstCut((s) => {
       if (s.turns.length === 0) return s;
       return {
         ...s,
@@ -386,7 +659,7 @@ export default function App() {
         ),
       };
     });
-    setV2((s) => {
+    setEngineered((s) => {
       if (s.turns.length === 0) return s;
       return {
         ...s,
@@ -398,8 +671,8 @@ export default function App() {
     setResetMsg("new session…");
     try {
       await Promise.all([
-        endSession(AGENTS.v1, customerId),
-        endSession(AGENTS.v2, customerId),
+        endSession(AGENTS.first_cut, customerId),
+        endSession(AGENTS.engineered, customerId),
       ]);
       // The file is preserved server-side, but a refetch confirms that
       // for the audience (and re-renders the drawer with the same chars).
@@ -411,18 +684,6 @@ export default function App() {
     }
   }
 
-  async function evaluate() {
-    if (anyRunning) return;
-    setResetMsg("running deterministic evaluations…");
-    try {
-      const result = await runEvaluationSuite();
-      setEvaluation(result);
-      setResetMsg(null);
-    } catch (err) {
-      setResetMsg(`evaluation failed: ${err instanceof Error ? err.message : String(err)}`);
-    }
-  }
-
   /** Called when the presenter clicks a scenario prompt in the panel.
    *  Pre-fills the composer; flips the model dropdown if the scenario
    *  specifies one. The customer dropdown is NOT auto-flipped — the
@@ -431,14 +692,11 @@ export default function App() {
   function applyScenario(scenario: DemoScenario, prompt: ScenarioPrompt) {
     setComposerText(prompt.text);
     if (scenario.id !== selectedScenarioId) {
-      setScenarioRunId(
-        typeof crypto !== "undefined" && "randomUUID" in crypto
-          ? crypto.randomUUID()
-          : `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
-      );
+      setScenarioRunId(newRunId());
     }
     setSelectedScenarioId(scenario.id);
     if (scenario.model) setSelectedModel(scenario.model);
+    setRefundServiceTimeout(scenario.fault === "refund_service_timeout");
   }
 
   return (
@@ -463,7 +721,11 @@ export default function App() {
           <Field label="session" htmlFor="customer">
             <Select
               value={customerId}
-              onValueChange={setCustomerId}
+              onValueChange={(value) => {
+                setCustomerId(value);
+                setChatRunId(newRunId());
+                setScenarioRunId(selectedScenarioId ? newRunId() : null);
+              }}
               disabled={anyRunning}
             >
               <SelectTrigger id="customer" className="w-[180px]">
@@ -498,24 +760,64 @@ export default function App() {
             </Select>
           </Field>
 
-          <Field label="tool budget" htmlFor="tool-budget">
+          <Field label="total-token budget" htmlFor="token-budget">
             <Select
-              value={String(toolBudget)}
-              onValueChange={(value) => setToolBudget(Number(value))}
+              value={String(tokenBudget)}
+              onValueChange={(value) => setTokenBudget(Number(value))}
               disabled={anyRunning}
             >
-              <SelectTrigger id="tool-budget" className="w-[110px]">
+              <SelectTrigger id="token-budget" className="w-[120px]">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                {TOOL_BUDGET_OPTIONS.map((value) => (
+                {TOKEN_BUDGET_OPTIONS.map((value) => (
                   <SelectItem key={value} value={String(value)}>
-                    {value} calls
+                    {value < 1000 ? `${value} tokens` : `${value / 1000}k tokens`}
                   </SelectItem>
                 ))}
               </SelectContent>
             </Select>
           </Field>
+
+          <Field label="auto-compact at" htmlFor="compact-at">
+            <Select
+              value={String(compactAt)}
+              onValueChange={(value) => setCompactAt(Number(value))}
+              disabled={anyRunning}
+            >
+              <SelectTrigger id="compact-at" className="w-[120px]">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {COMPACT_AT_OPTIONS.map((value) => (
+                  <SelectItem key={value} value={String(value)}>
+                    {value === 0 ? "off" : `${value / 1000}k context`}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </Field>
+
+          <button
+            type="button"
+            disabled={anyRunning}
+            onClick={() => setRefundServiceTimeout((enabled) => !enabled)}
+            aria-pressed={refundServiceTimeout}
+            title="One-shot fault: the next refund service call times out before commit"
+            className={cn(
+              "inline-flex h-9 items-center gap-1.5 rounded-md border px-2.5 text-xs transition-colors",
+              "disabled:cursor-not-allowed disabled:opacity-50",
+              refundServiceTimeout
+                ? "border-amber-500/50 bg-amber-500/15 text-amber-700 dark:text-amber-400"
+                : "border-input bg-background text-muted-foreground hover:bg-accent",
+            )}
+          >
+            <WifiOff className="h-3.5 w-3.5" />
+            timeout next refund
+            <span className="text-[10px] uppercase tracking-wider opacity-70">
+              {refundServiceTimeout ? "armed" : "off"}
+            </span>
+          </button>
 
           <Button
             variant={scenariosOpen ? "secondary" : "outline"}
@@ -533,14 +835,10 @@ export default function App() {
             size="sm"
             onClick={nextSession}
             disabled={anyRunning}
-            title="Simulate 'time has passed'. Drops conversation memory on both sides; v2's episodic memory file persists."
+            title="Simulate 'time has passed'. Drops conversation memory on both sides; the engineered agent's episodic memory file persists."
           >
             <Hourglass className="mr-1 h-3.5 w-3.5" />
             end session
-          </Button>
-          <Button variant="outline" size="sm" onClick={evaluate} disabled={anyRunning}>
-            <FlaskConical className="mr-1 h-3.5 w-3.5" />
-            evaluate
           </Button>
           <Button variant="outline" size="sm" onClick={reset} disabled={anyRunning}>
             <RotateCcw className="mr-1 h-3.5 w-3.5" />
@@ -562,32 +860,42 @@ export default function App() {
         <div className="flex min-h-0 flex-1 flex-col gap-4">
           <main className="grid min-h-0 flex-1 grid-cols-2 gap-4">
             <AgentPanel
-              service={AGENTS.v1}
-              state={v1}
-              tools={v1Tools}
-              toolsLoading={v1ToolsLoading}
-              toolsError={v1ToolsError}
-              onToggleEnabled={() => toggleEnabled("v1")}
-              plannerEnabled={v1PlannerEnabled}
+              service={AGENTS.first_cut}
+              state={firstCut}
+              tools={firstCutTools}
+              systemPrompt={firstCutSystemPrompt}
+              toolsLoading={firstCutToolsLoading}
+              toolsError={firstCutToolsError}
+              onToggleEnabled={() => toggleEnabled("first_cut")}
+              onAnswerPause={(turn, approved, decisions) =>
+                answerPause("first_cut", turn, approved, decisions)
+              }
+              pauseBusy={anyRunning}
+              plannerEnabled={firstCutPlannerEnabled}
               onTogglePlanner={() => {
                 // Planner toggle is per-request — no agent rebuild, no
-                // confirm dialog, no reset. Same shape as v2's planner
+                // confirm dialog, no reset. Same shape as engineered's planner
                 // toggle, just independent state.
                 if (anyRunning) return;
-                setV1PlannerEnabled((v) => !v);
+                setFirstCutPlannerEnabled((v) => !v);
               }}
               featuresDisabled={anyRunning}
             />
             <AgentPanel
-              service={AGENTS.v2}
-              state={v2}
-              tools={v2Tools}
-              toolsLoading={v2ToolsLoading}
-              toolsError={v2ToolsError}
-              onToggleEnabled={() => toggleEnabled("v2")}
-              skillsEnabled={v2SkillsEnabled}
-              episodicEnabled={v2EpisodicEnabled}
-              plannerEnabled={v2PlannerEnabled}
+              service={AGENTS.engineered}
+              state={engineered}
+              tools={engineeredTools}
+              systemPrompt={engineeredSystemPrompt}
+              toolsLoading={engineeredToolsLoading}
+              toolsError={engineeredToolsError}
+              onToggleEnabled={() => toggleEnabled("engineered")}
+              onAnswerPause={(turn, approved, decisions) =>
+                answerPause("engineered", turn, approved, decisions)
+              }
+              pauseBusy={anyRunning}
+              skillsEnabled={engineeredSkillsEnabled}
+              episodicEnabled={engineeredEpisodicEnabled}
+              plannerEnabled={engineeredPlannerEnabled}
               onToggleSkills={() => toggleV2Feature("skills")}
               onToggleEpisodic={() => toggleV2Feature("episodic")}
               onTogglePlanner={() => {
@@ -595,11 +903,11 @@ export default function App() {
                 // confirm dialog, no reset. The next /api/run picks up
                 // the new value via the request body.
                 if (anyRunning) return;
-                setV2PlannerEnabled((v) => !v);
+                setEngineeredPlannerEnabled((v) => !v);
               }}
               featuresDisabled={anyRunning}
               customerId={customerId}
-              memoryRefreshKey={v2MemoryRefreshKey}
+              memoryRefreshKey={engineeredMemoryRefreshKey}
             />
           </main>
           <footer className="shrink-0 pb-4">
@@ -634,13 +942,12 @@ export default function App() {
               }?`
             : ""
         }
-        description="This triggers a full reset, same as the reset button. Both agents' chat history and mock data will be cleared, and v2's non-seed episodic memory will be wiped."
+        description="This triggers a full reset, same as the reset button. Both agents' chat history and mock data will be cleared, and the engineered agent's non-seed episodic memory will be wiped."
         confirmLabel="reset"
         destructive
         onConfirm={confirmV2Toggle}
         onCancel={() => setPendingV2Toggle(null)}
       />
-      {evaluation && <EvaluationPanel suite={evaluation} onClose={() => setEvaluation(null)} />}
     </div>
   );
 }

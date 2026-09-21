@@ -29,22 +29,22 @@ export const DEFAULT_MODEL: SupportedModel = "gpt-5.4-mini";
 export interface AgentService {
   variant: AgentVariant;
   baseUrl: string;
-  label: string;       // e.g. "Customer Support · v1"
-  caption: string;     // e.g. "cs-agent-v1"
+  label: string;       // e.g. "Customer Support · first-cut"
+  caption: string;     // e.g. "cs-agent-first-cut"
 }
 
 export const AGENTS: Record<AgentVariant, AgentService> = {
-  v1: {
-    variant: "v1",
+  first_cut: {
+    variant: "first_cut",
     baseUrl: "http://localhost:8001",
     label: "FIRST-CUT LOOP",
-    caption: "cs-agent-v1 · broad, implicit control",
+    caption: "cs-agent-first-cut",
   },
-  v2: {
-    variant: "v2",
+  engineered: {
+    variant: "engineered",
     baseUrl: "http://localhost:8002",
     label: "ENGINEERED LOOP",
-    caption: "cs-agent-v2 · explicit harness",
+    caption: "cs-agent-engineered",
   },
 };
 
@@ -52,16 +52,46 @@ export interface RunArgs {
   prompt: string;
   customer_id: string;
   model?: string;
-  // v2 feature toggles. Ignored by v1.
+  // engineered feature toggles. Ignored by first-cut.
   skills_enabled?: boolean;
   episodic_enabled?: boolean;
   // `planner_enabled` is per-request — no agent rebuild needed, so it can
   // flip mid-session unlike skills/episodic.
   planner_enabled?: boolean;
   run_id?: string;
-  tool_budget?: number;
+  /** One grant's size, in total agent-loop tokens (input + output). */
+  token_budget?: number;
+  /** engineered only — auto-compaction line, in projected input tokens for the
+   *  next model call. Omitted or 0 leaves context to grow. Live like
+   *  `token_budget`: it applies to the next model call, with no reset. */
+  compact_at?: number;
+  /** One-shot demo fault: next refund service call times out pre-commit. */
+  refund_service_timeout?: boolean;
+  /** Answers a `budget_grant_required` pause: resume `run_id` with one more
+   *  grant (true) rather than starting a new task. */
+  budget_grant?: boolean;
+  /** Answers a `write_confirmation_required` pause holding a single write:
+   *  run it (true) or cancel it (false). Either way the parked loop resumes. */
+  confirm?: boolean;
+  /** Answers a `write_confirmation_required` pause per parked write, keyed by
+   *  interrupt id. Used whenever the model queued more than one write, so an
+   *  approval of one never carries the others with it. */
+  confirm_decisions?: Record<string, boolean>;
   signal?: AbortSignal;
   onEvent: (ev: AgentEvent) => void;
+}
+
+/** Tell the service the customer chose Stop on a paused task, so the pause
+ *  doesn't linger and make the next message ambiguous. No agent runs. */
+export async function stopPausedTask(
+  svc: AgentService,
+  args: { customer_id: string; run_id?: string },
+): Promise<void> {
+  await fetch(`${svc.baseUrl}/api/budget_stop`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(args),
+  });
 }
 
 /** POST /api/run and stream SSE events through `onEvent`. */
@@ -83,7 +113,14 @@ export async function runAgent(svc: AgentService, args: RunArgs): Promise<void> 
         ? { planner_enabled: args.planner_enabled }
         : {}),
       ...(args.run_id ? { run_id: args.run_id } : {}),
-      ...(args.tool_budget !== undefined ? { tool_budget: args.tool_budget } : {}),
+      ...(args.token_budget !== undefined ? { token_budget: args.token_budget } : {}),
+      ...(args.compact_at !== undefined ? { compact_at: args.compact_at } : {}),
+      ...(args.refund_service_timeout !== undefined
+        ? { refund_service_timeout: args.refund_service_timeout }
+        : {}),
+      ...(args.budget_grant !== undefined ? { budget_grant: args.budget_grant } : {}),
+      ...(args.confirm !== undefined ? { confirm: args.confirm } : {}),
+      ...(args.confirm_decisions ? { confirm_decisions: args.confirm_decisions } : {}),
     }),
     signal: args.signal,
   });
@@ -173,7 +210,7 @@ export interface AgentMemory {
   content: string;
 }
 
-/** GET /api/memory — the customer's episodic-memory file. v2 only; v1
+/** GET /api/memory — the customer's episodic-memory file. engineered only; first-cut
  *  has no episodic memory. Returns `exists: false` with an empty
  *  `content` when no file has been written yet. */
 export async function fetchMemory(
@@ -200,14 +237,22 @@ export interface AgentTool {
   };
 }
 
-/** GET /api/tools — list of tools this agent has registered.
- *  v2 honors `skills_enabled` / `episodic_enabled` query params so the
- *  drawer matches the live tool set for the current toggle state. v1
+/** GET /api/tools — the tools this agent has registered, plus its system
+ *  prompt. Both are properties of the agent, not of any one turn, so they
+ *  are read here rather than picked out of a run's event stream.
+ *  engineered honors `skills_enabled` / `episodic_enabled` query params so the
+ *  drawer matches the live tool set for the current toggle state. first-cut
  *  ignores them. UI refetches whenever the toggles flip. */
+export interface AgentCatalog {
+  tools: AgentTool[];
+  /** The agent's rendered system prompt for the current toggle combo. */
+  systemPrompt: string;
+}
+
 export async function fetchTools(
   svc: AgentService,
   flags?: { skills_enabled?: boolean; episodic_enabled?: boolean },
-): Promise<AgentTool[]> {
+): Promise<AgentCatalog> {
   const params = new URLSearchParams();
   if (flags?.skills_enabled !== undefined) {
     params.set("skills_enabled", String(flags.skills_enabled));
@@ -220,27 +265,44 @@ export async function fetchTools(
   if (!response.ok) {
     throw new Error(`${svc.variant} /api/tools returned ${response.status}`);
   }
-  const body = (await response.json()) as { tools?: AgentTool[] };
-  return body.tools ?? [];
+  const body = (await response.json()) as {
+    tools?: AgentTool[];
+    system_prompt?: string;
+  };
+  return { tools: body.tools ?? [], systemPrompt: body.system_prompt ?? "" };
 }
 
-export interface EvaluationSuite {
-  results: Array<{
-    scenario_id: string;
-    case: string;
-    kind: "outcome_and_trajectory";
-    first_cut: { passed: boolean };
-    engineered: { passed: boolean };
-    expected_behavior: { first_cut: string; engineered: string };
-    outcome_assertions: Array<{ name: string; passed: boolean }>;
-    trajectory_assertions: Array<{ name: string; passed: boolean }>;
-    evidence: Record<string, unknown>;
+/** One turn as the agent remembers it, rebuilt from `agent.messages`. */
+export interface RestoredTurn {
+  user_prompt: string;
+  final_reply: string;
+  trace: Array<{
+    tool_use_id: string;
+    name: string;
+    args: unknown;
+    args_summary: string;
+    result?: unknown;
+    result_summary?: string;
+    is_error?: boolean;
   }>;
-  summary: { first_cut: number; engineered: number; total: number };
 }
 
-export async function runEvaluationSuite(): Promise<EvaluationSuite> {
-  const response = await fetch(`${AGENTS.v2.baseUrl}/api/evaluations/run`, { method: "POST" });
-  if (!response.ok) throw new Error(`evaluation suite returned ${response.status}`);
-  return (await response.json()) as EvaluationSuite;
+/** GET /api/session — the conversation currently in the agent's memory.
+ *  Lets the console rebuild the thread after a browser refresh instead of
+ *  showing an empty panel beside an agent that still remembers everything.
+ *  engineered scopes the session by customer; first-cut has one shared agent. */
+export async function fetchSession(
+  svc: AgentService,
+  customerId: string,
+): Promise<RestoredTurn[]> {
+  const qs =
+    svc.variant === "engineered"
+      ? `?customer_id=${encodeURIComponent(customerId)}`
+      : "";
+  const response = await fetch(`${svc.baseUrl}/api/session${qs}`);
+  if (!response.ok) {
+    throw new Error(`${svc.variant} /api/session returned ${response.status}`);
+  }
+  const body = (await response.json()) as { turns?: RestoredTurn[] };
+  return body.turns ?? [];
 }

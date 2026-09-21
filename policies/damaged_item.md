@@ -1,32 +1,47 @@
 ---
-id: damaged_item
-title: Damaged on arrival
+id: refund_damaged_item
+title: Refunds and replacements for items that arrive damaged
 keywords: [damaged, broken, cracked, smashed, dented, leaking, defective, arrived broken]
 ---
 
-# Damaged on arrival
+# Refunds and replacements for items that arrive damaged
 
-Damaged items require **photo evidence** before a refund or replacement can be
-issued. The customer doesn't need to ship the item back — they can keep it.
+## Scope and evidence standard
 
-A return label MUST be sent immediately as a goodwill gesture, even before the
-photo arrives. The label costs us nothing; the trust signal is significant.
+This policy applies when merchandise is alleged to have arrived broken,
+cracked, smashed, dented, leaking, torn, or otherwise unusable because of
+physical damage. Cosmetic preference, ordinary wear, and a customer changing
+their mind are not damage claims and are considered under `return_window`.
+Where an order is both within the return window and damaged, this policy takes
+precedence.
 
-## Agent action
+A refund or replacement requires clear photo evidence attached to the order in
+`damage_photos`. A customer's statement that a photo exists, an offer to send a
+photo later, or a filename included in chat is not evidence on file. The order
+record is authoritative. The image should show the affected item and enough of
+the damage to support the claim; agents do not need to assess photographic
+quality when the order record already marks the evidence as accepted.
 
-1. Acknowledge the customer's inconvenience first (empathy before evidence).
-2. Send the return label immediately (open a low-priority human ticket if no
-   tool is available for direct label issuance).
-3. Request a clear photo of the damaged area.
-4. **Do NOT issue refund until photo is in hand.**
-5. Once photo arrives, issue a full refund with reason `"damaged_item_full_refund"`
-   (or `"damaged_item_partial"` depending on the scope of damage).
+## Resolution sequence
 
-## Exceptions / escalations
+1. Confirm the exact order and damaged item. Do not use evidence belonging to a
+   different order or another item in the same customer's history.
+2. Check whether accepted photo evidence is on the selected order.
+3. If no photo is on file, do not issue compensation. Ask the customer to
+   upload the photo through the normal support channel and open a missing-photo
+   exception by escalating at priority `normal`. The ticket is a review
+   request; it is not approval and does not mean a refund has been issued.
+4. If accepted evidence is on file, determine the affected share of the order.
+   Damage to the entire order qualifies for the damaged-on-arrival percentage
+   in `refund_calculation`. Partial damage may qualify only for a proportional
+   percentage representing the affected part of the order.
+5. Apply `refund_authority` and subtract prior refunds as required by
+   `refund_calculation` before issuing anything.
 
-- If the customer can't provide a photo (lost the package, visually impaired, etc.) —
-  escalate to a human with priority `normal`.
-- Items with **safety implications** (sharp glass, electrical hazards, items for
-  children) — escalate regardless of dollar value with priority `high`.
-- Repeat damaged delivery to the same address (2+ in 6 months) — escalate with
-  priority `high`. This is a fulfillment issue, not a customer issue.
+## Mandatory escalation
+
+Escalate at priority `high` when the damage creates a safety hazard, when the
+customer reports two or more damaged deliveries to the same address within six
+months, or when the available records appear inconsistent. These escalations
+do not waive the photo requirement. An agent must not describe an escalation,
+requested upload, or pending review as a completed refund or replacement.

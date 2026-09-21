@@ -1,65 +1,57 @@
 ---
 id: refund_calculation
-title: Refund calculation — how to compute the percentage to refund
+title: How to calculate the refund percentage to issue
 keywords: [refund calculation, how to compute refund, refund percentage, cancellation refund, net refund, prior refund, partial refund, refund amount, what percentage to refund]
 ---
 
-# Refund calculation
+# How to calculate the refund percentage to issue
 
-How to figure out **what percentage of an order to refund**. The `issue_refund` tool takes a percentage; the backend multiplies it by the order's `total_usd` to get the dollar amount logged in the ledger. The agent's job is to pick the *right* percentage for the situation, and to subtract anything already refunded on that order so the customer isn't paid twice.
+Refund entitlement is expressed as a percentage of the selected order's
+`total_usd`. This policy supplies calculation rules only; it does not establish
+that the customer meets the category-specific evidence or timing conditions.
+The category policy must be applied first.
 
-## Refund percentages by category
+| Category | Entitlement | Conditions |
+| --- | ---: | --- |
+| Damaged on arrival | 100% | Required evidence under `refund_damaged_item` |
+| Cancellation before shipment | 90% | Order is `placed` or `preparing` |
+| Shipping delay | 10% store credit | Delivery is more than 3 business days late |
+| Return | 100% | Eligible under `return_window` |
+| Changed mind after shipment | None | Human review required |
 
-| Refund category                              | Percentage of `total_usd` | Notes                                                                 |
-| -------------------------------------------- | ------------------------- | --------------------------------------------------------------------- |
-| Damaged on arrival                           | **100%**                  | Photo evidence required — see `damaged_item` policy.                  |
-| Cancellation before shipment (placed/preparing) | **90%**               | 10% retained as restocking / handling fee.                            |
-| Shipping delay credit (delivery still expected) | **10%**                | Store credit. Customer keeps the order. See `shipping_delay` policy.  |
-| Return within window (delivered, undamaged)  | **100%**                  | Within 30 days; see `return_window` policy.                           |
-| Goodwill / customer-changed-mind after ship  | **Not eligible**          | Escalate; this is a human-judgment call.                              |
+The percentages are maximum category entitlements, not automatic awards. For
+partial damage, use the percentage of the order represented by the affected
+item or items. Do not apply the full-order percentage merely because one item
+is unusable. A shipping-delay credit does not convert into a cancellation or
+return refund and does not close the order.
 
-## Net refund formula
+## Net entitlement
 
-When a customer has *already received* a refund on the same order (e.g. a 10% shipping-delay credit was issued earlier, and now they want to cancel), do NOT issue the full new category percentage on top. Compute the **net**:
+Before issuing any refund or credit, retrieve refund history and subtract all
+prior refund percentages recorded for the same order from the applicable
+category percentage:
 
 ```
 net_refund_percentage = category_percentage − sum(prior refund_percentage on this order)
 ```
 
-`get_refund_history` returns a `refund_percentage` field on every entry — sum those for entries whose `order_id` matches the order in play. No dollar-math required: the ledger records the fraction of `total_usd` each refund used. (If a legacy entry is ever missing `refund_percentage`, fall back to `amount_usd / order.total_usd` for that entry only.)
+- If the net percentage is zero or negative, no additional refund is owed. Do
+  not create a zero-value transaction and do not move the claim to a different
+  reason code to manufacture entitlement.
+- A cancellation refund is allowed only after `cancel_order` succeeds. Checking
+  that an order appears cancellable is not equivalent to cancellation.
+- Shipping-delay compensation is store credit and leaves the order active.
+- A return refund becomes eligible only after the customer confirms the item
+  has been shipped back, as required by `return_window`.
+- Every calculated transaction remains subject to `refund_authority`.
 
-### Worked example
+## Worked interpretation rules
 
-Order #1241 — `total_usd = $100`, status `preparing`.
-- `get_refund_history` shows one prior refund on #1241 with `refund_percentage = 0.10`, reason `shipping_delay_credit`.
-- Customer now wants to cancel.
-- Category percentage from the table above: **90%** (cancellation before shipment).
-- Net to issue now: `0.90 − 0.10 = 0.80` → server computes `$80`.
+If a $100 order qualifies for a 90% cancellation refund and already received a
+10% shipping-delay credit recorded as `refund_percentage=0.10`, the remaining
+cancellation entitlement is 80%, or $80. If the same order had already
+received 90% or more, nothing further is owed under the cancellation category.
 
-Call `issue_refund(order_id="1241", refund_percentage=0.80, reason="cancellation_after_delay_credit")`.
-
-## Required procedure for the agent
-
-1. **`get_order(order_id)`** — confirm `total_usd` and `status`.
-2. **`get_refund_history(customer_id)`** — filter entries by `order_id` and SUM their `refund_percentage` values. That is your `already_refunded_percentage`.
-3. **`search_policy_kb`** — confirm the category percentage from this policy (don't memorize the table; the numbers may change).
-4. **Compute** `net = category_percentage − already_refunded_percentage`. If `net <= 0`, do NOT issue — escalate (customer has already been refunded as much as policy allows).
-5. **For a cancellation refund** — call `cancel_order(order_id, reason)` FIRST and confirm it returned `{"ok": True, ...}`. Only then proceed to step 6. Refunding before the cancel succeeds is forbidden (see ordering rule below).
-6. **Call `issue_refund(order_id, refund_percentage=net, reason=...)`** with a descriptive reason that references both the category and the prior-refund context (e.g. `"cancel_net_of_prior"`).
-
-## Ordering rule (cancellation refunds)
-
-`cancel_order` MUST succeed before `issue_refund` is called on the same order. Reason: refunding first and then cancelling leaves a window where the customer has been paid back on a still-active order; if the cancel rejects (e.g. the order shipped between calls), the refund has to be reversed by a human. The pre-cancel checks (status, refund history, policy lookup) are all read-only; only `cancel_order` changes state, and only after that succeeds do you issue the refund.
-
-## Anti-patterns
-
-- ❌ Issuing the full category percentage without subtracting prior refunds — the customer is over-paid and audit will flag it.
-- ❌ Splitting a single legitimate refund into multiple smaller calls to dodge the cap — explicitly prohibited by `refund_authority`.
-- ❌ Picking a percentage from memory without `search_policy_kb` — percentages may have changed since the model's training.
-- ❌ Treating a shipping-delay credit as a "refund to original payment" — it's a store credit, customer keeps the order, both can coexist with a later cancel/damage refund (subject to the net formula).
-
-## Related policies
-
-- `damaged_item`, `shipping_delay`, `return_window` — category-specific evidence rules and qualifying conditions.
-- `refund_authority` — the agent's cap, the anti-split rule, and over-cap escalation. this should be refered by the point you read refund calulatioj policy. 
-- `address_change` — for cancellation requests on already-shipped orders (different path; not eligible for cancellation refund).
+Use the percentage values stored in refund history, not a dollar amount divided
+back into a percentage unless no percentage is available. Never subtract a
+refund from a different order, even when the items or totals are similar.
