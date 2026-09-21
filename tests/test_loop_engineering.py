@@ -29,6 +29,8 @@ from policy_evaluator import (
 from cs_agent_engineered.agent.hooks import (
     CONFIRM_BEFORE_TOOLS,
     HumanConfirmationHook,
+    RefundCapHook,
+    RefundEvidenceHook,
     confirmation_card,
     confirmation_question,
     is_affirmative,
@@ -886,3 +888,69 @@ class AutoCompactionTests(unittest.TestCase):
         window = MessageWindow(window_size=4)
         self.assertTrue(asyncio.run(window.apply(self._context(agent))))
         self.assertLessEqual(len(agent.messages), 5)
+
+
+class RefundHookChainTests(unittest.TestCase):
+    """The two refund hooks as the agent actually runs them: in registration
+    order, against one event.
+
+    `RefundEntitlementTests` covers the MCP server, where the ordering was
+    already right. The hooks fire before the wire, so whichever error survives
+    here is the one the customer gets — and until the evidence hook learned to
+    stand down, that was not the same error the server would have returned.
+    """
+
+    AGENT_ID = "test_refund_hook_chain"
+
+    def setUp(self) -> None:
+        # Isolated data dir, same reason as RefundEntitlementTests: the hooks
+        # read order state, and a shared dir would make `make test` depend on
+        # whatever the last demo left behind.
+        reset_data_files(self.AGENT_ID)
+
+    class FakeEvent:
+        def __init__(self, order_id: str, pct: float, reason_code: str) -> None:
+            self.tool_use = {
+                "name": "issue_refund",
+                "input": {
+                    "customer_id": "cust_001",
+                    "order_id": order_id,
+                    "refund_percentage": pct,
+                    "reason_code": reason_code,
+                    "reason": "test",
+                },
+            }
+            self.cancel_tool = False
+
+    def _run_both_hooks(self, event) -> dict:
+        """Cap then evidence — the order `build_agent` registers them in."""
+        RefundCapHook(refund_cap_usd=200.0, agent_id=self.AGENT_ID)._enforce_cap(event)
+        RefundEvidenceHook(agent_id=self.AGENT_ID)._enforce_entitlement(event)
+        return json.loads(event.cancel_tool)
+
+    def test_the_cap_error_survives_a_call_that_also_lacks_evidence(self) -> None:
+        """#1239 is $250 and damaged with no photos, so both hooks want to
+        reject it. The cap is the harder limit, and it is what the server
+        reports, so it must be what the harness reports too."""
+        rejection = self._run_both_hooks(self.FakeEvent("1239", 1.0, "damaged"))
+        self.assertEqual(rejection.get("code"), 403)
+        self.assertEqual(rejection.get("remediation"), "escalate_to_human")
+
+    def test_the_photo_rule_still_fires_when_the_cap_is_untouched(self) -> None:
+        """The guard must stand the evidence hook down only behind another
+        hook's rejection, never disarm it. #1243 is $58 — nowhere near the
+        $200 cap — and still has no photos on file."""
+        rejection = self._run_both_hooks(self.FakeEvent("1243", 1.0, "damaged"))
+        self.assertEqual(rejection.get("code"), 422)
+        self.assertIn("no damage photos on file", rejection.get("detail", ""))
+
+
+class PoliteFillerTests(unittest.TestCase):
+    """"no problem" is not a no. Fail-closed is for an unclear answer."""
+
+    def test_polite_filler_reads_as_approval(self) -> None:
+        for reply in ("yes, no problem", "go ahead, no rush"):
+            self.assertTrue(is_affirmative(reply), reply)
+
+    def test_a_real_refusal_beside_the_filler_still_wins(self) -> None:
+        self.assertFalse(is_affirmative("no problem, but don't cancel it"))
