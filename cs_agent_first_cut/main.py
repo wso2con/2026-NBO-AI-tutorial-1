@@ -363,9 +363,13 @@ async def _run_agent_stream(agent: Agent, prompt: str, *, run_state):
 class RunRequest(BaseModel):
     prompt: str
     customer_id: str  # Accepted for parity with engineered's API; first-cut does not bind
-    #                 — the LLM picks whatever ID the user mentions in the
-    #                 prompt. customer_id here is unused server-side, so a
-    #                 prompt-injection attack on tenancy actually works.
+    #                 it. The value IS used — `frame_prompt` puts it in the
+    #                 message as a session note — but only as text the model
+    #                 reads, never as something the server checks. The LLM is
+    #                 free to pass whatever ID the user mentions in the prompt
+    #                 to any tool, so a prompt-injection attack on tenancy
+    #                 actually works. engineered's `CustomerIdBindingHook` is
+    #                 the counterpart that makes the ID harness-owned instead.
     model: str | None = None  # Per-request override; falls back to MODEL_ID.
     # Per-request planner toggle. first-cut has no skills loader, so the planner
     # always runs with `skills_enabled=False`. Per-request, no rebuild

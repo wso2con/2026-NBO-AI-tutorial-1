@@ -244,8 +244,21 @@ def apply_task_contract(run: RunState, contract: dict[str, Any], source: str) ->
     """Register a reusable procedure contract discovered at runtime.
 
     Contracts come from enabled Skills, never from a selected demo scenario.
-    The Skill explains the procedure to the model while this structured view
-    gives the harness observable completion and ordering rules.
+    The Skill explains the procedure to the model; this structured view is the
+    same procedure in a form a reviewer can check against the trace.
+
+    It is evidence, not enforcement. `ordering_constraints` and
+    `action_preconditions` are recorded here and read in exactly one place —
+    serialized into `declared_contract` for the LLM trajectory reviewer, which
+    judges the turn after it has already happened. Nothing in the loop consults
+    them before a tool runs, so a contract cannot stop anything on its own.
+
+    The controls that actually hold live below the model: the engineered MCP
+    server rejects a cancellation refund whose order is not yet cancelled (the
+    `reason_code` check in `mcp_servers/customer_support_engineered/__main__.py`),
+    and `RefundCapHook` / `RefundEvidenceHook` / `HumanConfirmationHook` cancel
+    the call at the harness before it ships. Read this function as the
+    reviewer's yardstick, and read those as the gate.
     """
     goal = str(contract.get("goal", "")).strip()
     if goal:

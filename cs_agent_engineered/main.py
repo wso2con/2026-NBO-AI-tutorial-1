@@ -1085,7 +1085,16 @@ async def run(req: RunRequest):
                         is_error=bool(body.get("is_error")),
                         tool_use_id=body.get("tool_use_id") or None,
                     )
-                    if "service_timeout" in json.dumps(body.get("result"), default=str):
+                    # Read the structured field, not the stringified result:
+                    # an escalation `reason` or a policy brief quoting the
+                    # remediation also contains the word "service_timeout".
+                    # The lab's own lesson — the error is structured, so match
+                    # it structurally.
+                    tool_result = body.get("result")
+                    if (
+                        isinstance(tool_result, dict)
+                        and tool_result.get("error") == "service_timeout"
+                    ):
                         yield loop_event(
                             "recovery",
                             run_state,
@@ -1122,9 +1131,11 @@ async def run(req: RunRequest):
                             skill_name=skill_name,
                             procedural_context=body.get("result"),
                         )
-                    if body.get("tool_use_id") and any(
-                        marker in str(body.get("result", ""))
-                        for marker in ("saved_for", "rewrote")
+                    # Same rule: a memory write is the two tools that write
+                    # memory, not any result whose text happens to carry their
+                    # response keys.
+                    if body.get("name") in {"append_memory", "compact_memory"} and not body.get(
+                        "is_error"
                     ):
                         yield loop_event(
                             "memory_write",
