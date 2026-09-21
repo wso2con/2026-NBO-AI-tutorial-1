@@ -114,6 +114,47 @@ def trace_tool_calls(mcp) -> None:
     manager.call_tool = traced
 
 
+class _UpgradeNoticeFilter(logging.Filter):
+    """Say what uvicorn's upgrade warning actually means, once.
+
+    uvicorn logs a bare "Unsupported upgrade request." whenever it declines a
+    `Connection: Upgrade` offer. On h11 that is the whole story — the request
+    is then served normally — but the message reads like a failure, it looks
+    identical to the one that accompanied the httptools 400s, and it repeats
+    for every request a chatty client sends. So it gets replaced with a line
+    that says what happened, and logged only the first time.
+    """
+
+    MESSAGE = "Unsupported upgrade request."
+
+    def __init__(self, http_impl: str) -> None:
+        super().__init__()
+        self._http_impl = http_impl
+        self._seen = False
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if record.getMessage() != self.MESSAGE:
+            return True
+        if self._seen:
+            return False
+        self._seen = True
+        if self._http_impl == "h11":
+            record.msg = (
+                "Declined an HTTP upgrade offer (Connection: Upgrade, typically an "
+                "HTTP/2 h2c probe from a client or proxy). Harmless: the request "
+                "itself is served normally. Logged once per run."
+            )
+            record.levelno, record.levelname = logging.INFO, "INFO"
+        else:
+            record.msg = (
+                "Declined an HTTP upgrade offer, and this parser drops the body of "
+                "such requests — expect a -32700 parse error and a dropped session. "
+                "Use the default --http h11 to serve them. Logged once per run."
+            )
+        record.args = ()
+        return True
+
+
 def enable_debug_logging() -> None:
     """Turn on tool tracing and the MCP framework's own debug output.
 
@@ -330,6 +371,7 @@ def serve(mcp, server_key: str, argv: list[str] | None = None) -> int:
         # h11 really is just noise. httptools is the faster parser, and
         # --http httptools takes it back where that matters more than talking
         # to clients you do not control.
+        logging.getLogger("uvicorn.error").addFilter(_UpgradeNoticeFilter(args.http))
         uvicorn.run(app, host=args.host, port=args.port, log_level=args.log_level, http=args.http)
     except KeyboardInterrupt:
         print("\nstopped.")
