@@ -43,14 +43,22 @@ load_dotenv(_LAB_ROOT / ".env")
 load_dotenv(Path(__file__).parent / ".env", override=False)
 
 from agent import AGENT_ID, build_agent, frame_prompt
-from config import MODEL_ID
+from config import MODEL_ID, REFUND_CAP_USD
 from planner import format_tool_specs, plan_for_prompt
+from policy_evaluator import (
+    ASPECTS as EVALUATION_ASPECTS,
+    aggregate_verdict,
+    evaluate_turn,
+)
 from loop_state import (
     RunStore,
+    add_auxiliary,
     context_snapshot,
     event as loop_event,
+    loop_tokens_used,
     record_iteration,
     record_observation,
+    usage_payload,
 )
 from strands import Agent
 from strands.models.openai import OpenAIModel
@@ -198,6 +206,11 @@ def _extract_tool_result_body(block: dict) -> Any:
 
 async def _run_agent_stream(agent: Agent, prompt: str, *, run_state):
     """Yield SSE events for one agent turn."""
+    # OpenAI reports the call's total input but not its internal split. The
+    # budget hook uses this small estimate only once, to subtract the first
+    # user message from the first exact input total and establish the stable
+    # system-prompt + tool-contract baseline used by the context chart.
+    agent._current_user_message_token_estimate = max(1, (len(prompt) + 3) // 4)
     yield {
         "event": "system_prompt",
         "data": json.dumps({"content": agent.system_prompt or ""}),
@@ -327,7 +340,12 @@ async def _run_agent_stream(agent: Agent, prompt: str, *, run_state):
             if final_reply:
                 break
 
-    yield {"event": "done", "data": json.dumps({"final_reply": final_reply})}
+    yield {
+        "event": "done",
+        "data": json.dumps(
+            {"final_reply": final_reply, "usage": usage_payload(run_state)}
+        ),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -347,7 +365,7 @@ class RunRequest(BaseModel):
     # needed — the planner is a separate LLM call, not part of agent build.
     planner_enabled: bool | None = None
     run_id: str | None = None
-    tool_budget: int | None = None
+    token_budget: int | None = None
 
 
 app = FastAPI(title="cs_agent_first_cut", version="0.1.0")
@@ -392,7 +410,7 @@ async def run(req: RunRequest):
         run_id=req.run_id,
         customer_id=req.customer_id,
         goal=req.prompt.strip(),
-        tool_budget=req.tool_budget,
+        token_budget=req.token_budget,
     )
     agent._active_run_state = run_state
     agent.model = OpenAIModel(model_id=req.model or MODEL_ID)
@@ -411,12 +429,13 @@ async def run(req: RunRequest):
             tools_catalogue = format_tool_specs(
                 agent.tool_registry.get_all_tool_specs()
             )
-            plan = await plan_for_prompt(
+            plan, planner_usage = await plan_for_prompt(
                 req.prompt,
                 model=req.model or MODEL_ID,
                 tools_catalogue=tools_catalogue,
                 skills_enabled=False,
             )
+            add_auxiliary(run_state, planner_usage)
         except Exception:  # noqa: BLE001
             # Planner failures (timeout, rate limit) shouldn't take the
             # turn down — fall back to the unplanned prompt.
@@ -427,6 +446,7 @@ async def run(req: RunRequest):
         framed_prompt = f"{plan}\n\n{framed_prompt}"
 
     async def generator():
+        proposed_reply = ""
         tools = agent.tool_registry.get_all_tool_specs()
         snapshot = context_snapshot(
             variant="first_cut",
@@ -494,11 +514,14 @@ async def run(req: RunRequest):
                         decision="CONTINUE",
                     )
                 if ev.get("event") == "done":
+                    proposed_reply = json.loads(ev.get("data", "{}")).get(
+                        "final_reply", ""
+                    )
                     if run_state.next_loop_state == "BUDGET_EXHAUSTED":
                         yield loop_event(
                             "completion",
                             run_state,
-                            "Tool budget exhausted before the request completed",
+                            "Token budget exceeded before the request completed",
                             exit_reason=run_state.exit_reason,
                             state=run_state.dump(),
                         )
@@ -507,8 +530,10 @@ async def run(req: RunRequest):
                             "data": json.dumps(
                                 {
                                     "message": (
-                                        f"Tool-call budget exhausted at "
-                                        f"{run_state.tool_call_count}/{run_state.max_tool_calls}."
+                                        f"Token budget exceeded at "
+                                        f"{loop_tokens_used(run_state):,}/"
+                                        f"{run_state.token_budget:,} total tokens "
+                                        f"after {run_state.tool_call_count} tool calls."
                                     )
                                 }
                             ),
@@ -524,6 +549,50 @@ async def run(req: RunRequest):
                         exit_reason="MODEL_STOP",
                         state=run_state.dump(),
                     )
+
+            # The answer has already been released. Review the same evidence
+            # bundle used for engineered so the comparison is symmetric.
+            evaluation_results: list[dict[str, Any]] = []
+            yield loop_event(
+                "evaluation_started",
+                run_state,
+                "Reviewing the completed turn",
+                aspects=[
+                    {"aspect": key, "label": label}
+                    for key, (label, _prompt, _slices) in EVALUATION_ASPECTS.items()
+                ],
+            )
+            try:
+                async for result, usage in evaluate_turn(
+                    model=req.model or MODEL_ID,
+                    customer_request=req.prompt,
+                    proposed_reply=proposed_reply,
+                    tool_history=run_state.tool_history,
+                    declared_contract=None,
+                    refund_cap_usd=REFUND_CAP_USD,
+                ):
+                    add_auxiliary(run_state, usage)
+                    evaluation_results.append(result)
+                    yield loop_event(
+                        "evaluation_aspect",
+                        run_state,
+                        f"{result['label']}: {result['verdict']}",
+                        evaluation=result,
+                        model=req.model or MODEL_ID,
+                    )
+            except Exception:  # noqa: BLE001
+                log.exception("post-turn evaluation failed")
+
+            verdict = aggregate_verdict(evaluation_results)
+            run_state.evaluation_status = verdict
+            yield loop_event(
+                "evaluation_complete",
+                run_state,
+                f"Review complete: {verdict}",
+                verdict=verdict,
+                aspects=evaluation_results,
+                usage=usage_payload(run_state),
+            )
         except Exception as exc:  # noqa: BLE001
             log.exception("agent stream failed")
             yield {"event": "error", "data": json.dumps({"message": str(exc)})}

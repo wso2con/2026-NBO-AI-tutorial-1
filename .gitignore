@@ -40,3 +40,6 @@ cs_agent_engineered/memory/episodic/customer_*.md
 
 # Engineered-agent conversation memory (Strands FileSessionManager — per-customer history).
 cs_agent_engineered/memory/sessions/
+
+.deck-*
+output/

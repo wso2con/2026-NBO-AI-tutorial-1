@@ -6,14 +6,14 @@ API are the source of truth; this file is just notes from past interactions.
 
 ## Open promises (verify before replying)
 
-- **2026-05-01** — Promised Bob a replacement for order #2246 (pour-over
-  dripper set) by ~2026-05-06. Tracked via TICKET-1001 (warehouse / batch-QC
+- **2026-09-10** — Promised Bob a replacement for order #2246 (pour-over
+  dripper set) by ~2026-09-15. Tracked via TICKET-1001 (warehouse / batch-QC
   investigation). Look it up via `get_open_tickets(cust_002)` before
   responding to anything about #2246.
 
 ## Observations
 
-- **2026-05-01** — SECOND damaged delivery to Lindenstrasse, Munich within
+- **2026-09-10** — SECOND damaged delivery to Lindenstrasse, Munich within
   6 months. Pattern is fulfillment-side, not customer-side. Don't gaslight
   Bob as a one-off.
 - Tone on the prior call: understanding but pointed. He is keeping score.

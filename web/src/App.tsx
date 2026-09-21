@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { BookOpen, Hourglass, RotateCcw, Sparkles, FlaskConical } from "lucide-react";
+import { BookOpen, Hourglass, RotateCcw, Sparkles } from "lucide-react";
 import {
   AGENTS,
   DEFAULT_MODEL,
@@ -8,12 +8,11 @@ import {
   fetchSession,
   fetchTools,
   runAgent,
+  stopPausedTask,
   resetAgent,
-  runEvaluationSuite,
   type AgentService,
   type AgentTool,
   type SupportedModel,
-  type EvaluationSuite,
 } from "@/lib/api";
 import {
   emptyAgentState,
@@ -22,12 +21,13 @@ import {
   type AgentEvent,
   type AgentState,
   type AgentVariant,
+  type EvaluationAspect,
   type Turn,
+  type TurnEvaluation,
 } from "@/lib/types";
 import { AgentPanel } from "@/components/AgentPanel";
 import { Composer } from "@/components/Composer";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
-import { EvaluationPanel } from "@/components/EvaluationPanel";
 import { ScenariosPanel } from "@/components/ScenariosPanel";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { Button } from "@/components/ui/button";
@@ -46,18 +46,28 @@ const CUSTOMERS = [
   { id: "cust_003", label: "Carol · cust_003" },
 ];
 
-const DEFAULT_TOOL_BUDGET = 12;
-const TOOL_BUDGET_OPTIONS = [3, 4, 5, 8, 10, 12];
+// Session budget for the agent loop's total provider usage (input + output).
+// Harness-side planner/reviewer calls and the policy MCP's one-time lookup are
+// deliberately outside this number.
+const DEFAULT_TOKEN_BUDGET = 40000;
+const TOKEN_BUDGET_OPTIONS = [4000, 8000, 16000, 40000, 80000, 160000];
+
+function newRunId() {
+  return typeof crypto !== "undefined" && "randomUUID" in crypto
+    ? crypto.randomUUID()
+    : `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+}
 
 export default function App() {
   const [customerId, setCustomerId] = useState<string>("cust_001");
   const [selectedModel, setSelectedModel] = useState<SupportedModel>(DEFAULT_MODEL);
-  const [toolBudget, setToolBudget] = useState(DEFAULT_TOOL_BUDGET);
+  const [tokenBudget, setTokenBudget] = useState(DEFAULT_TOKEN_BUDGET);
   // Composer text lives in App so the Scenarios panel can pre-fill it on click.
   const [composerText, setComposerText] = useState("");
   const [scenariosOpen, setScenariosOpen] = useState(false);
   const [selectedScenarioId, setSelectedScenarioId] = useState<string | null>(null);
   const [scenarioRunId, setScenarioRunId] = useState<string | null>(null);
+  const [chatRunId, setChatRunId] = useState(newRunId);
   const [firstCut, setFirstCut] = useState<AgentState>(emptyAgentState);
   const [engineered, setEngineered] = useState<AgentState>(emptyAgentState);
   // engineered-only feature toggles. `skills` / `episodic` default OFF so the engineered
@@ -99,7 +109,6 @@ export default function App() {
   const [firstCutToolsError, setFirstCutToolsError] = useState<string | null>(null);
   const [engineeredToolsError, setEngineeredToolsError] = useState<string | null>(null);
   const [resetMsg, setResetMsg] = useState<string | null>(null);
-  const [evaluation, setEvaluation] = useState<EvaluationSuite | null>(null);
   const abortRef = useRef<AbortController | null>(null);
 
   // Rehydrate each panel's thread from the agent's own session memory.
@@ -222,18 +231,24 @@ export default function App() {
           updateTurn(variant, turnId, (t) => ({ ...t, plan: ev.content }));
           break;
         case "tool_call":
-          updateTurn(variant, turnId, (t) => ({
-            ...t,
-            trace: [
-              ...t.trace,
-              {
-                tool_use_id: ev.tool_use_id,
-                name: ev.name,
-                args: ev.args,
-                args_summary: ev.args_summary,
-              },
-            ],
-          }));
+          updateTurn(variant, turnId, (t) => {
+            const row = {
+              tool_use_id: ev.tool_use_id,
+              name: ev.name,
+              args: ev.args,
+              args_summary: ev.args_summary,
+            };
+            // A resumed turn re-announces the calls that were still in flight
+            // when it paused, so its trace reads on its own. Those rows are
+            // already here — replace rather than append, or an approved write
+            // shows up twice.
+            const at = t.trace.findIndex((r) => r.tool_use_id === ev.tool_use_id);
+            if (at === -1) return { ...t, trace: [...t.trace, row] };
+            return {
+              ...t,
+              trace: t.trace.map((r, i) => (i === at ? { ...r, ...row } : r)),
+            };
+          });
           break;
         case "tool_result":
           updateTurn(variant, turnId, (t) => ({
@@ -261,6 +276,8 @@ export default function App() {
             ...t,
             status: "done",
             final_reply: ev.final_reply || t.streaming_reply,
+            usage: ev.usage ?? t.usage,
+            pause: ev.pause ?? t.pause,
           }));
           // The engineered agent may have appended to its episodic memory file
           // during this turn; nudge the MemoryDrawer to refetch.
@@ -282,17 +299,75 @@ export default function App() {
         case "task_contract":
         case "llm_decision":
         case "action_selection":
+        case "human_approval":
         case "state_transition":
         case "loop_decision":
         case "recovery":
         case "reconciliation":
-        case "validation":
         case "completion":
-        case "evaluation":
           updateTurn(variant, turnId, (t) => ({
             ...t,
             run_id: ev.run_id,
             loop_events: [...t.loop_events, ev],
+          }));
+          break;
+
+        // The post-turn review. These land after `done`, so the turn is
+        // already marked complete and the reply is already rendered — they
+        // only fill in the chip beside it.
+        case "evaluation_started":
+          updateTurn(variant, turnId, (t) => ({
+            ...t,
+            run_id: ev.run_id,
+            loop_events: [...t.loop_events, ev],
+            evaluation: {
+              status: "pending",
+              expected: Array.isArray(ev.aspects)
+                ? (ev.aspects as TurnEvaluation["expected"])
+                : [],
+              aspects: [],
+            },
+          }));
+          break;
+        case "evaluation_aspect":
+          updateTurn(variant, turnId, (t) => {
+            const incoming = ev.evaluation as EvaluationAspect | undefined;
+            if (!incoming) return t;
+            const previous = t.evaluation ?? {
+              status: "pending" as const,
+              expected: [],
+              aspects: [],
+            };
+            return {
+              ...t,
+              run_id: ev.run_id,
+              loop_events: [...t.loop_events, ev],
+              evaluation: {
+                ...previous,
+                // Aspects complete out of order, and a redelivered frame must
+                // not double up, so replace by key rather than append blindly.
+                aspects: [
+                  ...previous.aspects.filter((a) => a.aspect !== incoming.aspect),
+                  incoming,
+                ],
+              },
+            };
+          });
+          break;
+        case "evaluation_complete":
+          updateTurn(variant, turnId, (t) => ({
+            ...t,
+            run_id: ev.run_id,
+            loop_events: [...t.loop_events, ev],
+            usage: (ev.usage as Turn["usage"]) ?? t.usage,
+            evaluation: {
+              status: "complete",
+              verdict: ev.verdict as TurnEvaluation["verdict"],
+              expected: t.evaluation?.expected ?? [],
+              aspects: Array.isArray(ev.aspects)
+                ? (ev.aspects as EvaluationAspect[])
+                : (t.evaluation?.aspects ?? []),
+            },
           }));
           break;
       }
@@ -300,15 +375,126 @@ export default function App() {
     [updateTurn],
   );
 
+  /** Answer the inline pause on a turn that is holding work behind a human
+   *  decision. Both kinds resume the SAME run on the agent that paused, and
+   *  the other column's turn is finished and must not be replayed.
+   *
+   *  - budget: "Continue" grants more tokens and resumes the loop, adding
+   *    nothing to the conversation. "Stop" drops the pause server side and
+   *    runs nothing. It ends one turn and starts another, so it gets a turn
+   *    of its own in the thread.
+   *  - write confirmation: the loop is parked mid-tool-call, inside the turn
+   *    already on screen. The decision goes back as structured data on the
+   *    parked interrupts — the conversation the model reads never gains a
+   *    question or an answer — so the turn simply continues where it stopped
+   *    instead of a new exchange appearing in the chat. `decisions` carries
+   *    one answer per queued write; approving one write never resumes
+   *    another. */
+  async function answerPause(
+    variant: AgentVariant,
+    turn: Turn,
+    approved: boolean,
+    decisions?: Record<string, boolean>,
+  ) {
+    const pause = turn.pause;
+    if (!pause) return;
+    const isBudget = pause.code === "budget_grant_required";
+    updateTurn(variant, turn.id, (t) =>
+      isBudget
+        ? { ...t, pause_answered: approved ? "confirmed" : "rejected" }
+        : {
+            ...t,
+            // The question is answered, so it stops being a pending pause and
+            // becomes part of the turn's record. Appending rather than
+            // replacing matters because a resumed turn can queue another write
+            // and arrive with a fresh `pause`, which must not erase what the
+            // customer already authorised.
+            pause: undefined,
+            approvals: [
+              ...(t.approvals ?? []),
+              ...(pause.awaiting ?? []).map((write) => ({
+                write,
+                approved: Boolean(decisions?.[write.id]),
+              })),
+            ],
+          },
+    );
+
+    const svc = variant === "engineered" ? AGENTS.engineered : AGENTS.first_cut;
+
+    if (isBudget && !approved) {
+      void stopPausedTask(svc, {
+        customer_id: customerId,
+        run_id: pause.run_id,
+      }).catch(() => undefined);
+      return;
+    }
+    if (anyRunning) return;
+
+    // A budget continuation is a fresh exchange in the thread. A write
+    // confirmation is not: it resumes the turn the customer is looking at, so
+    // its events stream back into that same card.
+    const setState = variant === "engineered" ? setEngineered : setFirstCut;
+    let streamTurnId = turn.id;
+    let prompt = "";
+    if (isBudget) {
+      // Label only. The server takes the decision from the structured field
+      // and adds no message to the conversation at all.
+      prompt = `Continue (+${(pause.grant_tokens ?? 0).toLocaleString()} total tokens)`;
+      const nextTurn = { ...newTurn(prompt), run_id: pause.run_id };
+      streamTurnId = nextTurn.id;
+      setState((s) => ({ ...s, turns: [...s.turns, nextTurn] }));
+    } else {
+      updateTurn(variant, turn.id, (t) => ({
+        ...t,
+        status: "running",
+        streaming_reply: "",
+        final_reply: "",
+        error: null,
+      }));
+    }
+
+    const controller = new AbortController();
+    abortRef.current = controller;
+    try {
+      await runAgent(svc, {
+        prompt,
+        customer_id: customerId,
+        model: selectedModel,
+        run_id: pause.run_id,
+        token_budget: tokenBudget,
+        ...(isBudget
+          ? { budget_grant: true }
+          : decisions
+            ? { confirm_decisions: decisions }
+            : { confirm: approved }),
+        ...(variant === "engineered"
+          ? {
+              skills_enabled: engineeredSkillsEnabled,
+              episodic_enabled: engineeredEpisodicEnabled,
+              planner_enabled: engineeredPlannerEnabled,
+            }
+          : { planner_enabled: firstCutPlannerEnabled }),
+        signal: controller.signal,
+        onEvent: handleEvent(variant, streamTurnId),
+      });
+      updateTurn(variant, streamTurnId, (t) =>
+        t.status === "running" ? { ...t, status: "done" } : t,
+      );
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      updateTurn(variant, streamTurnId, (t) => ({ ...t, status: "error", error: message }));
+    }
+  }
+
   async function send(prompt: string) {
     if (anyRunning) return;
 
     // Append a new turn to each ENABLED agent. Disabled ones simply skip.
-    const freshRunId =
-      typeof crypto !== "undefined" && "randomUUID" in crypto
-        ? crypto.randomUUID()
-        : `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
-    const comparisonRunId = selectedScenarioId && scenarioRunId ? scenarioRunId : freshRunId;
+    // Reuse one run id across messages in the same visible chat. That makes
+    // the usage meter cumulative in exactly the same way as conversation
+    // memory; reset/end-session/customer switch starts a new meter.
+    const comparisonRunId = selectedScenarioId && scenarioRunId ? scenarioRunId : chatRunId;
     const firstCutTurn = firstCut.enabled ? { ...newTurn(prompt), run_id: comparisonRunId } : null;
     const engineeredTurn = engineered.enabled ? { ...newTurn(prompt), run_id: comparisonRunId } : null;
 
@@ -328,7 +514,7 @@ export default function App() {
           customer_id: customerId,
           model: selectedModel,
           run_id: comparisonRunId,
-          tool_budget: toolBudget,
+          token_budget: tokenBudget,
           ...(variant === "engineered"
             ? {
                 skills_enabled: engineeredSkillsEnabled,
@@ -368,7 +554,9 @@ export default function App() {
     // Clear chat history on both columns but keep their enabled toggles.
     setFirstCut((s) => ({ ...s, turns: [] }));
     setEngineered((s) => ({ ...s, turns: [] }));
-    setToolBudget(DEFAULT_TOOL_BUDGET);
+    setChatRunId(newRunId());
+    setScenarioRunId(null);
+    setTokenBudget(DEFAULT_TOKEN_BUDGET);
     setResetMsg("resetting…");
     try {
       await Promise.all([resetAgent(AGENTS.first_cut), resetAgent(AGENTS.engineered)]);
@@ -415,7 +603,9 @@ export default function App() {
    *  divider is appended in each panel's thread to mark the boundary. */
   async function nextSession() {
     if (anyRunning) return;
-    setToolBudget(DEFAULT_TOOL_BUDGET);
+    setTokenBudget(DEFAULT_TOKEN_BUDGET);
+    setChatRunId(newRunId());
+    setScenarioRunId(null);
     // Mark a divider after the last turn in each enabled panel.
     setFirstCut((s) => {
       if (s.turns.length === 0) return s;
@@ -451,18 +641,6 @@ export default function App() {
     }
   }
 
-  async function evaluate() {
-    if (anyRunning) return;
-    setResetMsg("running deterministic evaluations…");
-    try {
-      const result = await runEvaluationSuite();
-      setEvaluation(result);
-      setResetMsg(null);
-    } catch (err) {
-      setResetMsg(`evaluation failed: ${err instanceof Error ? err.message : String(err)}`);
-    }
-  }
-
   /** Called when the presenter clicks a scenario prompt in the panel.
    *  Pre-fills the composer; flips the model dropdown if the scenario
    *  specifies one. The customer dropdown is NOT auto-flipped — the
@@ -471,11 +649,7 @@ export default function App() {
   function applyScenario(scenario: DemoScenario, prompt: ScenarioPrompt) {
     setComposerText(prompt.text);
     if (scenario.id !== selectedScenarioId) {
-      setScenarioRunId(
-        typeof crypto !== "undefined" && "randomUUID" in crypto
-          ? crypto.randomUUID()
-          : `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
-      );
+      setScenarioRunId(newRunId());
     }
     setSelectedScenarioId(scenario.id);
     if (scenario.model) setSelectedModel(scenario.model);
@@ -503,7 +677,11 @@ export default function App() {
           <Field label="session" htmlFor="customer">
             <Select
               value={customerId}
-              onValueChange={setCustomerId}
+              onValueChange={(value) => {
+                setCustomerId(value);
+                setChatRunId(newRunId());
+                setScenarioRunId(selectedScenarioId ? newRunId() : null);
+              }}
               disabled={anyRunning}
             >
               <SelectTrigger id="customer" className="w-[180px]">
@@ -538,19 +716,19 @@ export default function App() {
             </Select>
           </Field>
 
-          <Field label="tool budget" htmlFor="tool-budget">
+          <Field label="total-token budget" htmlFor="token-budget">
             <Select
-              value={String(toolBudget)}
-              onValueChange={(value) => setToolBudget(Number(value))}
+              value={String(tokenBudget)}
+              onValueChange={(value) => setTokenBudget(Number(value))}
               disabled={anyRunning}
             >
-              <SelectTrigger id="tool-budget" className="w-[110px]">
+              <SelectTrigger id="token-budget" className="w-[120px]">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                {TOOL_BUDGET_OPTIONS.map((value) => (
+                {TOKEN_BUDGET_OPTIONS.map((value) => (
                   <SelectItem key={value} value={String(value)}>
-                    {value} calls
+                    {value < 1000 ? `${value} tokens` : `${value / 1000}k tokens`}
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -577,10 +755,6 @@ export default function App() {
           >
             <Hourglass className="mr-1 h-3.5 w-3.5" />
             end session
-          </Button>
-          <Button variant="outline" size="sm" onClick={evaluate} disabled={anyRunning}>
-            <FlaskConical className="mr-1 h-3.5 w-3.5" />
-            evaluate
           </Button>
           <Button variant="outline" size="sm" onClick={reset} disabled={anyRunning}>
             <RotateCcw className="mr-1 h-3.5 w-3.5" />
@@ -609,6 +783,10 @@ export default function App() {
               toolsLoading={firstCutToolsLoading}
               toolsError={firstCutToolsError}
               onToggleEnabled={() => toggleEnabled("first_cut")}
+              onAnswerPause={(turn, approved, decisions) =>
+                answerPause("first_cut", turn, approved, decisions)
+              }
+              pauseBusy={anyRunning}
               plannerEnabled={firstCutPlannerEnabled}
               onTogglePlanner={() => {
                 // Planner toggle is per-request — no agent rebuild, no
@@ -627,6 +805,10 @@ export default function App() {
               toolsLoading={engineeredToolsLoading}
               toolsError={engineeredToolsError}
               onToggleEnabled={() => toggleEnabled("engineered")}
+              onAnswerPause={(turn, approved, decisions) =>
+                answerPause("engineered", turn, approved, decisions)
+              }
+              pauseBusy={anyRunning}
               skillsEnabled={engineeredSkillsEnabled}
               episodicEnabled={engineeredEpisodicEnabled}
               plannerEnabled={engineeredPlannerEnabled}
@@ -682,7 +864,6 @@ export default function App() {
         onConfirm={confirmV2Toggle}
         onCancel={() => setPendingV2Toggle(null)}
       />
-      {evaluation && <EvaluationPanel suite={evaluation} onClose={() => setEvaluation(null)} />}
     </div>
   );
 }

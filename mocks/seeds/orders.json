@@ -3,7 +3,7 @@
     "order_id": "1234",
     "customer_id": "cust_001",
     "status": "in_transit_delayed",
-    "placed": "2026-05-08",
+    "placed": "2026-09-13",
     "items": [
       "Wireless over-ear headphones (HD-X1, black)",
       "USB-C charging cable (2 m, braided)"
@@ -12,7 +12,7 @@
     "shipping_address": "221 Bakerstraße, 10117 Berlin",
     "carrier": "DHL",
     "tracking_id": "DHL-EXP-4521-8829-3017",
-    "estimated_delivery": "2026-05-11",
+    "estimated_delivery": "2026-09-16",
     "delivery_days_late": 4,
     "damaged": false,
     "payment_method": "VISA-4827"
@@ -21,7 +21,7 @@
     "order_id": "1238",
     "customer_id": "cust_001",
     "status": "delivered",
-    "placed": "2026-04-22",
+    "placed": "2026-08-28",
     "items": [
       "Athletic crew socks (3-pack, size L)"
     ],
@@ -29,7 +29,7 @@
     "shipping_address": "221 Bakerstraße, 10117 Berlin",
     "carrier": "DHL",
     "tracking_id": "DHL-STD-7741-2295-0014",
-    "estimated_delivery": "2026-04-25",
+    "estimated_delivery": "2026-08-31",
     "delivery_days_late": 0,
     "damaged": false,
     "payment_method": "VISA-4827"
@@ -38,7 +38,7 @@
     "order_id": "1239",
     "customer_id": "cust_001",
     "status": "delivered_damaged",
-    "placed": "2026-04-30",
+    "placed": "2026-09-05",
     "items": [
       "Waterproof winter coat (size M, navy)"
     ],
@@ -46,18 +46,19 @@
     "shipping_address": "221 Bakerstraße, 10117 Berlin",
     "carrier": "DHL",
     "tracking_id": "DHL-STD-8156-3471-0922",
-    "estimated_delivery": "2026-05-03",
+    "estimated_delivery": "2026-09-08",
     "delivery_days_late": 0,
     "damaged": true,
+    "damage_photos": [],
     "payment_method": "VISA-4827"
   },
   "1240": {
     "order_id": "1240",
     "customer_id": "cust_001",
     "status": "placed",
-    "placed": "2026-05-05",
+    "placed": "2026-09-10",
     "items": [
-      "Bluetooth speaker (compact, navy) — backorder, restock ETA 2026-05-22"
+      "Bluetooth speaker (compact, navy) — backorder, restock ETA 2026-10-07"
     ],
     "total_usd": 49.0,
     "shipping_address": "221 Bakerstraße, 10117 Berlin",
@@ -69,14 +70,14 @@
     "order_id": "1241",
     "customer_id": "cust_001",
     "status": "preparing",
-    "placed": "2026-05-06",
+    "placed": "2026-09-07",
     "items": [
       "Premium insulated water bottle set (1 L bottle + travel mug, matte black)"
     ],
     "total_usd": 100.0,
     "shipping_address": "221 Bakerstraße, 10117 Berlin",
-    "estimated_delivery": "2026-05-21",
-    "delivery_days_late": 0,
+    "estimated_delivery": "2026-09-15",
+    "delivery_days_late": 5,
     "damaged": false,
     "payment_method": "VISA-4827"
   },
@@ -84,7 +85,7 @@
     "order_id": "1242",
     "customer_id": "cust_001",
     "status": "in_transit",
-    "placed": "2026-05-17",
+    "placed": "2026-09-19",
     "items": [
       "Universal travel adapter (EU/US/UK, 65W USB-C)"
     ],
@@ -92,7 +93,7 @@
     "shipping_address": "221 Bakerstraße, 10117 Berlin",
     "carrier": "DHL",
     "tracking_id": "DHL-EXP-9821-4452-0117",
-    "estimated_delivery": "2026-05-19",
+    "estimated_delivery": "2026-09-22",
     "delivery_days_late": 0,
     "damaged": false,
     "payment_method": "VISA-4827"
@@ -101,7 +102,7 @@
     "order_id": "1243",
     "customer_id": "cust_001",
     "status": "delivered_damaged",
-    "placed": "2026-05-09",
+    "placed": "2026-09-11",
     "items": [
       "8-cup glass French press"
     ],
@@ -109,16 +110,17 @@
     "shipping_address": "221 Bakerstraße, 10117 Berlin",
     "carrier": "DHL",
     "tracking_id": "DHL-STD-8156-3472-0140",
-    "estimated_delivery": "2026-05-12",
+    "estimated_delivery": "2026-09-14",
     "delivery_days_late": 0,
     "damaged": true,
+    "damage_photos": [],
     "payment_method": "VISA-4827"
   },
   "2245": {
     "order_id": "2245",
     "customer_id": "cust_002",
     "status": "delivered",
-    "placed": "2026-03-15",
+    "placed": "2026-07-20",
     "items": [
       "Burr coffee grinder (16-setting)"
     ],
@@ -126,7 +128,7 @@
     "shipping_address": "14 Lindenstraße, 80331 Munich",
     "carrier": "Hermes",
     "tracking_id": "HRM-PARCEL-21557-0118",
-    "estimated_delivery": "2026-03-18",
+    "estimated_delivery": "2026-07-23",
     "delivery_days_late": 0,
     "damaged": false,
     "payment_method": "VISA-9134"
@@ -135,7 +137,7 @@
     "order_id": "2246",
     "customer_id": "cust_002",
     "status": "delivered_damaged",
-    "placed": "2026-04-30",
+    "placed": "2026-09-05",
     "items": [
       "Ceramic pour-over dripper set (600 ml)"
     ],
@@ -143,16 +145,17 @@
     "shipping_address": "14 Lindenstraße, 80331 Munich",
     "carrier": "Hermes",
     "tracking_id": "HRM-PARCEL-22014-0009",
-    "estimated_delivery": "2026-05-04",
+    "estimated_delivery": "2026-09-09",
     "delivery_days_late": 0,
     "damaged": true,
+    "damage_photos": [],
     "payment_method": "VISA-9134"
   },
   "5012": {
     "order_id": "5012",
     "customer_id": "cust_003",
     "status": "delivered",
-    "placed": "2026-04-01",
+    "placed": "2026-08-06",
     "items": [
       "Adjustable standing desks (4 units, electric, 60×30in)"
     ],
@@ -160,16 +163,16 @@
     "shipping_address": "Acme GmbH, Hauptstraße 9, 20457 Hamburg",
     "carrier": "UPS",
     "tracking_id": "UPS-1Z9X7384YW04412290",
-    "estimated_delivery": "2026-04-07",
+    "estimated_delivery": "2026-08-12",
     "delivery_days_late": 0,
     "damaged": false,
-    "payment_method": "INVOICE-PO-ACME-2026-Q1-088"
+    "payment_method": "INVOICE-PO-ACME-2026-Q3-088"
   },
   "5050": {
     "order_id": "5050",
     "customer_id": "cust_003",
     "status": "delivered_damaged",
-    "placed": "2026-05-06",
+    "placed": "2026-09-10",
     "items": [
       "Mesh-back ergonomic office chairs (12 units, B2B bulk)"
     ],
@@ -177,9 +180,31 @@
     "shipping_address": "Acme GmbH, Hauptstraße 9, 20457 Hamburg",
     "carrier": "UPS",
     "tracking_id": "UPS-1Z9X7384YW01234567",
-    "estimated_delivery": "2026-05-12",
+    "estimated_delivery": "2026-09-16",
     "delivery_days_late": 0,
     "damaged": true,
-    "payment_method": "INVOICE-PO-ACME-2026-Q2-014"
+    "damage_photos": [],
+    "payment_method": "INVOICE-PO-ACME-2026-Q3-014"
+  },
+  "1244": {
+    "order_id": "1244",
+    "customer_id": "cust_001",
+    "status": "delivered_damaged",
+    "placed": "2026-09-16",
+    "items": [
+      "Ceramic pour-over coffee dripper"
+    ],
+    "total_usd": 72.0,
+    "shipping_address": "221 Bakerstraße, 10117 Berlin",
+    "carrier": "DHL",
+    "tracking_id": "DHL-STD-8156-3473-0155",
+    "estimated_delivery": "2026-09-19",
+    "delivery_days_late": 0,
+    "damaged": true,
+    "damage_photos": [
+      "dmg-1244-01.jpg",
+      "dmg-1244-02.jpg"
+    ],
+    "payment_method": "VISA-4827"
   }
 }

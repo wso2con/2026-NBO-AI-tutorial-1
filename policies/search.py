@@ -1,19 +1,14 @@
-"""Shared policy-KB retrieval — same code path for first-cut and engineered.
+"""Shared policy-KB retrieval used by both demo agents.
 
-Both agents read from the same `policies/*.md` files using the same
-keyword-scored matcher and return the same shape. The DIFFERENCE
-between the two agents is in framing, not substance: first-cut exposes this
-via `search_kb` with a one-line docstring; engineered exposes it via
-`search_policy_kb` over MCP with a docstring that says "always call
-this BEFORE compensating actions" and a `handle-refund` skill that
-names the procedure. Same evidence on the table; different ergonomics
-push the LLM toward different first moves. That's the §6
-Plan-before-commit lesson — telling the LLM to consult policy isn't
-the same as wiring it to consult policy.
+The first-cut tool returns this retriever's top-three policy documents directly
+to the customer-support model. The engineered policy-advisor MCP uses the same
+retrieval result internally, then applies a specialist LLM and returns only a
+case-specific decision brief. The corpus and candidate selection are therefore
+shared; the context boundary is what differs.
 
-The retrieval itself is deliberately simple: parse frontmatter,
-score by `keywords` (2 pts) + title word overlap (1 pt), keep the
-top 3. Same scoring on both sides keeps the variable isolated.
+Retrieval is deliberately simple: score by frontmatter keywords and title-word
+overlap, then keep the top three. This makes the context-engineering comparison
+visible without turning the lab into a search-ranking exercise.
 """
 
 from __future__ import annotations
@@ -22,6 +17,17 @@ import re
 from pathlib import Path
 
 POLICIES_DIR = Path(__file__).parent
+_GENERIC_TITLE_WORDS = {
+    "order",
+    "orders",
+    "item",
+    "items",
+    "customer",
+    "customers",
+    "policy",
+    "when",
+    "within",
+}
 
 
 def _parse_policy(path: Path) -> dict:
@@ -90,7 +96,7 @@ def search(query: str, top_k: int = 3) -> list[dict]:
             if isinstance(kw, str) and kw.lower() in q:
                 score += 2
         for word in p["title"].lower().split():
-            if word in q and len(word) > 3:
+            if word in q and len(word) > 3 and word not in _GENERIC_TITLE_WORDS:
                 score += 1
         if score > 0:
             matches.append((score, p))

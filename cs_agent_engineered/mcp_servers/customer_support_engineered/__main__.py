@@ -94,11 +94,14 @@ def _load_owned_order(customer_id: str, order_id: str):
 
 @mcp.tool()
 def lookup_customer(customer_id: str) -> dict:
-    """Look up a customer's profile by their customer_id.
+    """Look up the current customer's profile.
 
-    Call this first when you need to verify who you're speaking with,
-    or when you need their tier, verification status, or email.
-    Returns the customer record, or {"error": "customer_not_found"}.
+    Use when you need customer details such as name, tier, verification
+    status, or email.
+
+    The customer is bound by the system; pass "" for `customer_id`.
+
+    Returns the customer record or `{"error": "customer_not_found"}`.
     """
     c = _client.get_customer(customer_id)
     if c is None:
@@ -114,15 +117,19 @@ def lookup_customer(customer_id: str) -> dict:
 
 @mcp.tool()
 def get_order(customer_id: str, order_id: str) -> dict:
-    """Fetch a single order by order_id, scoped to the verified customer.
+    """Fetch one order belonging to the current customer.
 
-    `customer_id` is the verified ID from the message prefix — pass it
-    directly. The server checks the order belongs to that customer; a
-    mismatch returns {"error": "ownership_mismatch", "code": 403, ...}
-    and you should NOT retry with a different customer_id.
+    Use when you know the order ID and need its status, items, total,
+    shipping address, delivery delay, or damage status.
 
-    On success returns: status, items, total_usd, shipping_address,
-    delivery_days_late, damaged flag.
+    `damage_photos` lists the damage photos already on file for this order.
+    An empty list means no photo evidence has been filed yet.
+
+    The customer is bound by the system; pass "" for `customer_id`.
+    Ownership is verified server-side.
+
+    Returns `ownership_mismatch` if the order does not belong to the
+    current customer. Do not retry with a different customer.
     """
     o, err = _load_owned_order(customer_id, order_id)
     if err is not None:
@@ -130,16 +137,68 @@ def get_order(customer_id: str, order_id: str) -> dict:
     return o.model_dump(exclude={"customer_id"})
 
 
+_OPEN_ORDER_STATUSES = {"placed", "preparing", "in_transit", "in_transit_delayed"}
+
+
+def _order_context(order) -> dict:
+    """Return the useful decision context without dumping the backend model.
+
+    The list tool is often the model's only observation before it selects an
+    order, so each row must be sufficient for the demo cases.  At the same
+    time, fields such as payment_method and raw photo filenames add tokens and
+    can pull attention away from the customer's item reference.
+    """
+    result = {
+        "order_id": order.order_id,
+        "items": order.items,
+        "status": order.status,
+        "placed": order.placed,
+        "total_usd": order.total_usd,
+    }
+
+    # Delivery state is useful for the missing-order, late-order, memory, and
+    # address-change demos.  The current address matters only while an order
+    # can still be delivered or intercepted.
+    if order.status in _OPEN_ORDER_STATUSES:
+        result["shipping_address"] = order.shipping_address
+    if order.carrier:
+        result["carrier"] = order.carrier
+    if order.tracking_id:
+        result["tracking_id"] = order.tracking_id
+    if order.estimated_delivery:
+        result["estimated_delivery"] = order.estimated_delivery
+    if order.delivery_days_late or order.status == "in_transit_delayed":
+        result["delivery_days_late"] = order.delivery_days_late
+
+    # Eligibility needs the presence of evidence, not opaque storage names.
+    # Keep this on the matched order so the agent does not need a second read.
+    if order.damaged or order.status == "delivered_damaged":
+        result["damage_evidence"] = {
+            "photos_on_file": bool(order.damage_photos),
+            "photo_count": len(order.damage_photos),
+        }
+
+    return result
+
+
 @mcp.tool()
-def get_customer_orders(customer_id: str, limit: int = 5) -> dict:
-    """List a customer's recent orders, most recent first, capped at `limit`.
+def get_customer_orders(customer_id: str, limit: int = 10) -> dict:
+    """List the current customer's recent orders as compact, complete case context.
 
-    The result reports `total` and `truncated`; if `truncated` is true, raise
-    `limit` before concluding an order does not exist.
+    Use when the customer has not provided an order ID or when order
+    history is relevant. Match the customer's order ID, item description, or
+    date to a row before considering eligibility. Never select a different
+    order merely because its state or evidence makes the requested action
+    easier. If no row matches uniquely, ask the customer to clarify.
 
-    Use when the customer doesn't give an order number, or when you need
-    their history to make a judgment call (e.g., repeat damaged delivery
-    signals a warehouse problem, not just a customer one).
+    Each row contains the fields needed for the order-status, damage, refund,
+    memory, and address-change demos. Do not call `get_order` merely to fetch
+    the same fields again.
+
+    The customer is bound by the system; pass "" for `customer_id`.
+
+    The result includes `total` and `truncated`. If `truncated` is true,
+    increase `limit` before concluding an order is not present.
     """
     items = _client.get_customer_orders(customer_id)
     items.sort(key=lambda o: o.placed, reverse=True)
@@ -148,7 +207,7 @@ def get_customer_orders(customer_id: str, limit: int = 5) -> dict:
     # but silently drops the order the customer is asking about sends the
     # model looking for the closest match among the rows it can see.
     return {
-        "orders": [o.model_dump(exclude={"customer_id"}) for o in shown],
+        "orders": [_order_context(o) for o in shown],
         "returned": len(shown),
         "total": len(items),
         "truncated": len(items) > len(shown),
@@ -157,16 +216,12 @@ def get_customer_orders(customer_id: str, limit: int = 5) -> dict:
 
 @mcp.tool()
 def get_open_tickets(customer_id: str) -> dict:
-    """Return tickets opened for this customer that are still status=open.
+    """Return open support tickets for the current customer.
 
-    Call this whenever episodic memory points at a ticket (e.g. "verify
-    TICKET-1001 progress before replying") OR before escalating something
-    that may already be tracked. Each result includes ticket_id, priority,
-    reason, opened_at — enough to decide whether the original issue is
-    still hanging vs. resolved.
+    Use before escalating an issue that may already be tracked, or when
+    previous context refers to an existing ticket.
 
-    Empty list = no open tickets on file. If a ticket your memory referenced
-    is NOT in here, treat memory as stale and update it via `append_memory`.
+    The customer is bound by the system; pass "" for `customer_id`.
     """
     tickets = _client.get_open_tickets(customer_id)
     return {"tickets": tickets, "count": len(tickets)}
@@ -174,27 +229,14 @@ def get_open_tickets(customer_id: str) -> dict:
 
 @mcp.tool()
 def get_refund_history(customer_id: str) -> dict:
-    """Return every refund previously issued to this customer.
+    """Return refunds previously issued to the current customer.
 
-    Call this BEFORE any new refund — episodic memory may claim "$X already
-    refunded on order Y", but this ledger is the source of truth.
+    Use when prior refunds are relevant to the current request.
 
-    Each entry includes:
-      - `ref`              — refund reference id
-      - `order_id`         — the order the refund was issued against
-      - `amount_usd`       — dollar amount logged
-      - `refund_percentage`— the fraction of order.total_usd this refund
-        represented (e.g. 0.10 for a 10% shipping credit). SUM these per
-        order to know how much percentage you have left to refund before
-        you hit the category cap from `refund_calculation`. No dollar-math
-        needed.
-      - `reason`, `issued_at`, `agent_id` — context.
+    Each entry includes the order, refunded amount, refund percentage,
+    reason, and reference.
 
-    Use it to:
-      - avoid double-refunding an order (anti-split policy)
-      - subtract prior `refund_percentage` from the category percentage
-        when issuing a new refund on the same order
-      - cite a specific past `ref` in your reply when relevant
+    The customer is bound by the system; pass "" for `customer_id`.
     """
     refunds = _client.get_refund_history(customer_id)
     return {"refunds": refunds, "count": len(refunds)}
@@ -205,15 +247,14 @@ def get_refund_history(customer_id: str) -> dict:
 
 @mcp.tool()
 def update_shipping_address(customer_id: str, order_id: str, new_address: str) -> dict:
-    """Update the shipping address on an order that has NOT yet shipped.
+    """Update the shipping address of an eligible order.
 
-    Scoped to the verified customer — pass `customer_id` from the
-    message prefix. Ownership is enforced server-side; a mismatch
-    returns {"error": "ownership_mismatch", "code": 403, ...}.
+    Use after you have the order and the new address required for the change.
 
-    Returns {"error": "order_already_shipped", "remediation": "redirect_to_carrier"}
-    if status is other than 'placed' or 'preparing'. On success:
-    {"ok": True, "ref": "<audit_ref>"}.
+    `reason` should briefly explain why the address is being changed.
+    The customer is bound by the system; pass "" for `customer_id`.
+
+    Returns `order_already_shipped` if the address can no longer be changed.
     """
     o, err = _load_owned_order(customer_id, order_id)
     if err is not None:
@@ -231,42 +272,14 @@ def update_shipping_address(customer_id: str, order_id: str, new_address: str) -
 
 @mcp.tool()
 def cancel_order(customer_id: str, order_id: str, reason: str) -> dict:
-    """Cancel an order that has NOT yet shipped.
+    """Cancel an eligible order.
 
-    Scoped to the verified customer. `reason` is logged to the audit
-    ledger. Same ownership and already-shipped error contracts as
-    `update_shipping_address`.
+    `reason` should briefly explain why the customer wants the cancellation.
+    The customer is bound by the system; pass "" for `customer_id`.
 
-    IMPORTANT — cancel_order does NOT issue a refund. It only flips the
-    order's status to `cancelled` and writes a `cancel` ledger entry.
-    If the customer paid for this order, you MUST call `issue_refund`
-    afterwards or the customer never gets their money back.
+    This tool only cancels the order; it does not issue a refund.
 
-    Post-condition (mandatory unless the order was never charged):
-
-      1. After this returns `{"ok": True, ...}`, look up the
-         `refund_calculation` policy for the current cancellation percentage.
-      2. Call `get_refund_history(customer_id)` and SUM the prior
-         `refund_percentage` values for THIS `order_id`. That's
-         `already_refunded_pct`.
-      3. Compute `net_pct = cancellation_pct - already_refunded_pct`.
-      4. If `net_pct > 0`, call
-         `issue_refund(order_id, refund_percentage=net_pct,
-                       reason="cancel_net_of_prior")`.
-         If `net_pct <= 0`, do NOT call issue_refund — the customer
-         has already been refunded the full cancellation entitlement
-         from a prior credit. Explain that in the reply.
-         `issue_refund` itself enforces the refund-authority cap; if
-         it returns a `policy_violation` 403, escalate the full refund
-         amount as a single ticket (do NOT split).
-      5. Confirm BOTH refs (cancel + refund) in the reply, or explain
-         why no refund was issued.
-
-    Skipping the refund step is the most common cancel-flow bug. The
-    audit ledger will show `cancel` with no following `refund` entry
-    on the same `order_id` and the customer will open another ticket.
-
-    See the `handle-cancellation` skill for the full procedure.
+    Returns `order_already_shipped` if the order can no longer be cancelled.
     """
     o, err = _load_owned_order(customer_id, order_id)
     if err is not None:
@@ -291,67 +304,128 @@ def cancel_order(customer_id: str, order_id: str, reason: str) -> dict:
     }
 
 
+# Every refund has to name the entitlement it is claiming, and every
+# entitlement is backed by a fact this backend already stores. That is what
+# makes the damaged-item photo rule checkable: the server never has to decide
+# whether a request "is a damage claim" (an intent classification it cannot do
+# soundly), it only has to verify the claim the caller made. An agent that
+# picks the wrong code to dodge a requirement just fails that code's own check.
+#
+# The codes are the categories in the `refund_calculation` policy table, no
+# more. There is deliberately no open "goodwill" code: one code without an
+# evidence requirement would be a hole big enough to drive every other claim
+# through, since an agent blocked on `damaged` could simply re-claim the same
+# refund under it.
+REFUND_REASON_CODES = ("damaged", "cancellation", "shipping_delay_credit", "return")
+
+
+def _refund_entitlement_error(order, reason_code: str) -> dict | None:
+    """Return a `policy_violation` body when stored facts do not support the
+    claimed reason code, or None when the entitlement holds."""
+    if reason_code == "damaged":
+        if not order.damaged:
+            return {
+                "detail": (
+                    f"order {order.order_id} is not recorded as damaged, so a "
+                    "damaged-item refund does not apply"
+                ),
+                "remediation": "Re-check the order status and use the reason code that matches it.",
+            }
+        if not order.damage_photos:
+            return {
+                "detail": (
+                    f"order {order.order_id} has no damage photos on file; the "
+                    "damaged-item policy requires photo evidence before any refund"
+                ),
+                "remediation": (
+                    "Ask the customer to send photos of the damage and escalate the "
+                    "missing-photo exception at normal priority."
+                ),
+            }
+    elif reason_code == "cancellation":
+        # `refund_calculation`: a cancellation refund is allowed only after the
+        # cancellation succeeds. Checking the status here makes the skills'
+        # cancel-before-refund ordering rule enforceable rather than advisory.
+        if order.status != "cancelled":
+            return {
+                "detail": (
+                    f"order {order.order_id} is {order.status}, not cancelled; a "
+                    "cancellation refund is only allowed after the cancellation succeeds"
+                ),
+                "remediation": "Call cancel_order first and refund only once it returns successfully.",
+            }
+    elif reason_code == "shipping_delay_credit":
+        # `shipping_delay`: 3 business days or less does not qualify.
+        if order.delivery_days_late <= 3:
+            return {
+                "detail": (
+                    f"order {order.order_id} is {order.delivery_days_late} day(s) late; "
+                    "shipping-delay credit requires more than 3 days"
+                ),
+                "remediation": "Check delivery_days_late on the order before claiming this code.",
+            }
+    elif reason_code == "return":
+        # `return_window`: damage claims follow `damaged_item` regardless of the
+        # window, so a damaged order cannot be refunded as a plain return.
+        #
+        # Known gap: the policy also requires the customer to have confirmed the
+        # item was shipped back, and this backend stores nothing about return
+        # shipments. That half of the rule is unenforceable here, so `return` is
+        # the one code whose check is incomplete. Recording return shipments
+        # would close it.
+        if order.damaged:
+            return {
+                "detail": (
+                    f"order {order.order_id} is recorded as damaged, so it follows the "
+                    "damaged-item policy rather than the return window"
+                ),
+                "remediation": "Use reason_code=\"damaged\" and satisfy the photo-evidence requirement.",
+            }
+    return None
+
+
 @mcp.tool()
 def issue_refund(
-    customer_id: str, order_id: str, refund_percentage: float, reason: str
+    customer_id: str, order_id: str, refund_percentage: float, reason_code: str, reason: str
 ) -> dict:
-    """Issue a refund as a percentage of the order's total_usd.
+    """Issue a refund for an order as a percentage of its total value.
 
-    `refund_percentage` is a fraction in (0, 1] — e.g. `0.25` for 25% or
-    `1.0` for a full refund. The server multiplies it by the order's
-    `total_usd` to get the dollar amount logged in the ledger and checked
-    against the agent's cap. The agent does NOT pass the dollar amount;
-    pick the right percentage instead.
+    `refund_percentage` must be a fraction in `(0, 1]`:
+    `0.25` means 25% and `1.0` means a full refund.
 
-    Procedure the agent MUST follow (otherwise audit will flag the call):
+    Determine the appropriate refund percentage before calling this tool.
 
-      1. Call `get_policy("refund_authority")` FIRST. It states
-         your dollar cap, the anti-split rule, and that over-cap refunds
-         must be escalated as a single ticket (not retried smaller).
-         Knowing the cap up front lets you short-circuit obvious over-cap
-         requests straight to escalation without spending tool calls on
-         category / history math you won't use.
-      2. Call `get_policy("refund_calculation")` to get the
-         percentage for the refund category (damaged / cancellation /
-         shipping_delay / return_window). Do NOT pick a number from memory.
-      3. Call `get_refund_history(customer_id)`, filter entries by
-         THIS `order_id`, and SUM their `refund_percentage` values.
-         That sum is `already_refunded_pct`. The ledger records the
-         fraction every prior refund used — no amount/total math.
-      4. Compute net: `net_pct = category_pct - already_refunded_pct`.
-      5. If `net_pct <= 0`, do NOT call this tool — escalate instead; the
-         customer has already been refunded everything policy allows.
-      6. Re-check against the cap with the concrete amount. If
-         `net_pct * order.total_usd` exceeds the cap from step 1, escalate
-         the FULL amount as a single ticket. Do NOT split.
-      7. Pass `net_pct` as `refund_percentage`. The server logs both pct
-         and dollar amount.
+    `reason_code` names the entitlement being claimed and is checked against
+    the order's stored facts. It must be one of:
+    - `damaged`: order must be recorded as damaged AND have damage photos on file
+    - `cancellation`: order must already be cancelled
+    - `shipping_delay_credit`: order must be more than 3 days late
+    - `return`: order must not be a damage claim
 
-    Ordering constraint for cancellation refunds: if this refund is the
-    money-back leg of a cancellation, `cancel_order` MUST have already
-    succeeded on this order BEFORE you call this tool. Refunding first
-    and then cancelling leaves a window where you've paid out on a
-    still-active order; if the cancel later rejects (e.g. it shipped
-    between calls), you have to reverse the refund. Always cancel first.
+    There is no catch-all code. If no code fits, the refund is not permitted
+    under policy: escalate instead of picking the nearest one.
 
-    Errors:
-      - {"error": "ownership_mismatch", "code": 403, ...} — wrong customer,
-        do NOT retry with a different `customer_id`.
-      - {"error": "invalid_pct", ...} — `refund_percentage` not in (0, 1].
-      - {"error": "policy_violation", "code": 403,
-         "detail": "refund of $X exceeds agent cap of $Y",
-         "remediation": "escalate_to_human"} — over cap. PERMANENT;
-        do NOT split into smaller calls — that violates `refund_authority`.
+    `reason` is free text describing why the refund is being issued.
 
-    Use specific `reason` values:
-      - "shipping_delay_credit" for delay compensation
-      - "damaged_item_full_refund" / "damaged_item_partial" for damage
-      - "return_within_window" for normal returns
-      - "cancellation_refund" / "cancel_net_of_prior" for cancellations
+    The customer is bound by the system; pass "" for `customer_id`.
+
+    On success, returns the refund reference, percentage, and dollar amount.
+
+    Important errors:
+    - `invalid_pct`: invalid refund percentage
+    - `invalid_reason_code`: unknown reason code
+    - `ownership_mismatch`: order does not belong to the customer
+    - `policy_violation`: refund is not permitted; follow its remediation
     """
     o, err = _load_owned_order(customer_id, order_id)
     if err is not None:
         return err
+
+    if reason_code not in REFUND_REASON_CODES:
+        return {
+            "error": "invalid_reason_code",
+            "allowed": list(REFUND_REASON_CODES),
+        }
 
     if not isinstance(refund_percentage, (int, float)) or refund_percentage <= 0 or refund_percentage > 1:
         return {
@@ -364,6 +438,10 @@ def issue_refund(
 
     amount_usd = round(float(refund_percentage) * float(o.total_usd), 2)
 
+    # The cap is checked before the entitlement so that an over-cap refund
+    # always surfaces as the authority failure, whatever code was claimed. The
+    # two only overlap on orders that fail both, and for those the cap is the
+    # harder limit: no evidence would make the refund permissible at this size.
     allowed, why = _identity.can_refund(amount_usd)
     if not allowed:
         return {
@@ -371,6 +449,15 @@ def issue_refund(
             "code": 403,
             "detail": why,
             "remediation": "escalate_to_human",
+        }
+
+    entitlement_error = _refund_entitlement_error(o, reason_code)
+    if entitlement_error is not None:
+        return {
+            "error": "policy_violation",
+            "code": 422,
+            "reason_code": reason_code,
+            **entitlement_error,
         }
 
     ref = _client.issue_refund(
@@ -384,6 +471,7 @@ def issue_refund(
     return {
         "ok": True,
         "ref": ref,
+        "reason_code": reason_code,
         "refund_percentage": float(refund_percentage),
         "amount_usd": amount_usd,
     }
@@ -398,33 +486,18 @@ def escalate_to_human(
     priority: str = "normal",
     customer_id: str | None = None,
 ) -> dict:
-    """Open a ticket for a human agent to handle.
+    """Open a support ticket for human handling.
 
-    Use when:
-      - the action exceeds your authority (e.g., refund > cap)
-      - the situation is ambiguous and needs human judgment
-      - the customer explicitly asks for a human
-      - input guardrails have flagged the message as adversarial
+    Use when human judgment or intervention is required, or when the
+    customer explicitly requests a human.
 
-    `reason` is **the customer's reason** for the escalation — what they
-    want and why, on their behalf. One or two sentences in plain English.
-    Do NOT include your reasoning chain, the tool calls you made, audit
-    pointers, customer profile fields, or what you'd like the human to
-    do — the human will pull all of that from the order/ticket/refund
-    APIs themselves. Keep it about the customer.
+    `reason` should briefly describe the customer's unresolved issue and
+    why it needs human handling. Do not include internal reasoning,
+    tool traces, or unnecessary customer data.
 
-      ✅ GOOD: "Customer wants a refund to the original card instead of
-                the $10 store credit already issued — says the 4-day
-                delay made the item useless to them."
+    `priority` must be one of: `low`, `normal`, `high`, `urgent`.
 
-      ❌ BAD:  "Customer: Alice Chen, standard tier. Orders touched:
-                #1234. Audit: refund_0002 store credit $10 issued
-                2026-05-16 by cs-agent-engineered. What I did: get_order,
-                get_refund_history, get_policy (shipping_delay).
-                Requested action: human review to approve refund to card
-                OR offer replacement..."
-
-    `priority` must be one of: 'low', 'normal', 'high', 'urgent'.
+    The customer is bound by the system; pass "" for `customer_id`.
     """
     if priority not in {"low", "normal", "high", "urgent"}:
         return {

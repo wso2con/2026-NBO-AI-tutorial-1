@@ -24,6 +24,7 @@ class ContextTraceHook:
     def _capture(self, event: BeforeModelCallEvent) -> None:
         agent = event.agent
         specs = agent.tool_registry.get_all_tool_specs()
+        system_prompt = str(agent.system_prompt or "")
         snapshots = getattr(agent, "_context_trace_snapshots", None)
         if snapshots is None:
             snapshots = []
@@ -31,7 +32,7 @@ class ContextTraceHook:
         snapshots.append(
             {
                 "messages": _json_safe(getattr(agent, "messages", []) or []),
-                "system_prompt": str(agent.system_prompt or ""),
+                "system_prompt": system_prompt,
                 "tool_contracts": _json_safe(specs),
                 "projected_input_tokens": event.projected_input_tokens,
             }

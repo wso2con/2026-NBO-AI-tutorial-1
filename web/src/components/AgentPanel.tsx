@@ -3,7 +3,7 @@ import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { cn } from "@/lib/utils";
 import type { AgentService, AgentTool } from "@/lib/api";
-import type { AgentState } from "@/lib/types";
+import type { AgentState, Turn } from "@/lib/types";
 import { MemoryDrawer } from "./MemoryDrawer";
 import { SystemPromptDrawer } from "./SystemPromptDrawer";
 import { ToolsDrawer } from "./ToolsDrawer";
@@ -18,6 +18,15 @@ interface Props {
   toolsLoading: boolean;
   toolsError: string | null;
   onToggleEnabled: () => void;
+  /** Answers a turn's inline pause prompt (currently the token-budget
+   *  continue/stop decision). */
+  onAnswerPause?: (
+    turn: Turn,
+    approved: boolean,
+    decisions?: Record<string, boolean>,
+  ) => void;
+  /** Disables the pause buttons while any agent is mid-stream. */
+  pauseBusy?: boolean;
   // engineered-only: feature toggles. Undefined for first-cut — the row doesn't render.
   skillsEnabled?: boolean;
   episodicEnabled?: boolean;
@@ -45,6 +54,8 @@ export function AgentPanel({
   toolsLoading,
   toolsError,
   onToggleEnabled,
+  onAnswerPause,
+  pauseBusy,
   skillsEnabled,
   episodicEnabled,
   plannerEnabled,
@@ -239,7 +250,12 @@ export function AgentPanel({
         ) : (
           state.turns.map((t, i) => (
             <div key={t.id} className="flex flex-col gap-3">
-              <TurnCard turn={t} isLatest={i === state.turns.length - 1} />
+              <TurnCard
+                turn={t}
+                isLatest={i === state.turns.length - 1}
+                onAnswerPause={onAnswerPause}
+                pauseBusy={pauseBusy}
+              />
               {t.session_ended_after && (
                 <div className="flex items-center gap-2 px-1 text-[10px] uppercase tracking-widest text-muted-foreground">
                   <div className="h-px flex-1 bg-border" />

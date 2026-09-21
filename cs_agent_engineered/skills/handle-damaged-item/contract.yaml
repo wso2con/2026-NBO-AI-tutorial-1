@@ -4,7 +4,6 @@ required_criteria:
   - order_observed
   - policy_observed
   - photo_evidence_requested
-  - return_label_arranged
   - response_produced
 action_preconditions:
   - tool: issue_refund

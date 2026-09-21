@@ -24,10 +24,11 @@ Two layers live here:
   boundary to cross. See README §2b's "tools that stay local" rule.
 """
 
-from datetime import UTC, datetime
 from pathlib import Path
 
 from strands import tool
+
+from demo_clock import stamp
 
 MEMORY_DIR = Path(__file__).parent.parent / "memory" / "episodic"
 
@@ -63,7 +64,7 @@ def append(customer_id: str, note: str) -> None:
     """Append a timestamped entry to the customer's memory file."""
     MEMORY_DIR.mkdir(parents=True, exist_ok=True)
     p = _path(customer_id)
-    timestamp = datetime.now(UTC).strftime("%Y-%m-%d %H:%M")
+    timestamp = stamp()
     entry = f"\n## {timestamp}\n{note}\n"
     with p.open("a", encoding="utf-8") as f:
         f.write(entry)
@@ -92,7 +93,7 @@ def append_memory(customer_id: str, note: str) -> dict:
     But this is Episodic memory, not a scratchpad — only record what tools cannot tell the next agent. Notes should be concise, like a sticky note.
 
     Record only what tools CANNOT tell the next agent:
-      - **Open promises** ("Told Bob a replacement would ship by 2026-05-12;
+      - **Open promises** ("Told Bob a replacement would ship by 2026-09-25;
         track TICKET-1042.")
       - **Behavioural patterns / tone** ("Second damaged delivery to this
         address in 6 months — fulfillment-side pattern, not customer-side.")
@@ -105,7 +106,7 @@ def append_memory(customer_id: str, note: str) -> dict:
         status — memory may be stale)
       - Customer tier / tenure / contact (use `lookup_customer`)
       - Order status / lateness / damage flag (use `get_order`)
-      - Policy citations (use `get_policy`)
+      - Policy citations (use `check_policy`)
 
     Concrete example — Alice complained #1234 was late; you issued a $10
     shipping_delay credit.
@@ -123,7 +124,7 @@ def append_memory(customer_id: str, note: str) -> dict:
     a tool call. The GOOD version captures only the promise made and the
     tone — the two things tools can't surface. Procedural follow-up advice
     ("if she follows up, trace + escalate per policy") is policy recap and
-    does NOT belong here — `handle-refund` + `get_policy` cover it.
+    does NOT belong here — `handle-refund` + `check_policy` cover it.
 
     `customer_id` is bound by the harness; pass an empty string or any
     placeholder"""

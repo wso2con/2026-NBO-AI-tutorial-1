@@ -33,9 +33,11 @@ endpoints so the lab returns to a known starting state across the board.
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime
+import os
+import tempfile
 from pathlib import Path
 
+from demo_clock import now_iso
 from mocks.models import Customer, Order
 
 SEEDS_DIR = Path(__file__).parent / "seeds"
@@ -56,6 +58,35 @@ def _agent_data_dir(agent_id: str) -> Path:
     return DATA_ROOT / agent_id
 
 
+def _write_json(path: Path, value) -> None:
+    """Publish `value` at `path` in one step.
+
+    The MCP servers run as separate processes against these same files, so a
+    reader can land at any instant during a write. `Path.write_text` truncates
+    first and fills after, which gives that reader a window on an empty or
+    half-written file — and `unlink`-then-rewrite gives it a window on no file
+    at all, which is the `[Errno 2] No such file or directory: orders.json` a
+    tool call hits when it runs while a reset is in flight.
+
+    Writing a temp file in the same directory and `os.replace`-ing it over the
+    target closes both windows: the rename is atomic on POSIX, so every reader
+    sees either the whole previous file or the whole new one, and the target
+    never stops existing.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = json.dumps(value, indent=2) + "\n"
+    # Same directory as the target: os.replace is only atomic within a
+    # filesystem, and /tmp may well be a different one.
+    fd, tmp_name = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w") as handle:
+            handle.write(payload)
+        os.replace(tmp_name, path)
+    except BaseException:
+        Path(tmp_name).unlink(missing_ok=True)
+        raise
+
+
 def _seed_if_missing(data_dir: Path) -> None:
     """Lazy initialisation: copy shared seeds into the agent's data dir for
     any file that doesn't exist yet. Doesn't touch files that ARE already
@@ -66,22 +97,23 @@ def _seed_if_missing(data_dir: Path) -> None:
         target = data_dir / name
         if target.exists():
             continue
-        target.write_text(json.dumps(_load_seed(name), indent=2) + "\n")
+        _write_json(target, _load_seed(name))
 
 
 def reset_data_files(agent_id: str) -> None:
-    """Delete the named agent's data files and reseed from the shared seeds.
+    """Restore the named agent's data files to the shared seed state.
     Used by /api/reset on both agents (first-cut calls it via `_client.reset()`;
     engineered calls it directly from main.py so the next-spawned MCP subprocess
     re-reads clean state). Only the named agent's data is touched — the
     sibling agent's state is left alone."""
     data_dir = _agent_data_dir(agent_id)
     data_dir.mkdir(parents=True, exist_ok=True)
+    # Overwrite in place rather than unlink-then-reseed. The MCP subprocess may
+    # be mid-tool-call against these files, and a file that briefly does not
+    # exist fails that call outright; a file replaced atomically just serves it
+    # the seed state, which is what a reset means anyway.
     for name in (CUSTOMERS_FILE, ORDERS_FILE, LEDGER_FILE):
-        target = data_dir / name
-        if target.exists():
-            target.unlink()
-    _seed_if_missing(data_dir)
+        _write_json(data_dir / name, _load_seed(name))
 
 
 class CustomerSupportClient:
@@ -117,10 +149,10 @@ class CustomerSupportClient:
     # ----- Disk write-through ------------------------------------------------
 
     def _flush_orders(self) -> None:
-        (self._data_dir / ORDERS_FILE).write_text(json.dumps(self._orders, indent=2) + "\n")
+        _write_json(self._data_dir / ORDERS_FILE, self._orders)
 
     def _flush_ledger(self) -> None:
-        (self._data_dir / LEDGER_FILE).write_text(json.dumps(self._ledger, indent=2) + "\n")
+        _write_json(self._data_dir / LEDGER_FILE, self._ledger)
 
     # ----- Reads -------------------------------------------------------------
 
@@ -198,7 +230,7 @@ class CustomerSupportClient:
             "amount_usd": amount_usd,
             "reason": reason,
             "actor_agent_id": agent_id,
-            "timestamp": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+            "timestamp": now_iso(),
         }
         if extra:
             entry.update(extra)

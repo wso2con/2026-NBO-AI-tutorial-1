@@ -22,7 +22,7 @@ Shipping addresses live per-order; there is no account-level address. When the c
    - Skip delivered / cancelled orders.
 5. **Wait for the customer's reply.** Act only on what they explicitly confirmed.
 6. **Execute the confirmed list:**
-   - For each updatable order they said yes to → `update_shipping_address(order_id, new_address)`. Collect the audit refs.
+   - For each updatable order they said yes to → `update_shipping_address(order_id, new_address)`. Collect the audit refs. The system holds each of these calls and asks the customer to confirm the change before it runs, so your turn ends on that question and resumes from their answer. That gate is about the write itself; step 4's question is about which orders are in scope. Both still apply. A `confirmation_denied` result means nothing was changed on that order — report it as untouched and don't retry.
    - For each intercept they confirmed → `escalate_to_human` with priority `high`, reason "carrier intercept for order=<id>, new_address=<addr>". Cite `address_change` policy.
 7. **Final reply** — what was updated (orders + refs), which intercepts were escalated, anything left untouched at the customer's request.
 

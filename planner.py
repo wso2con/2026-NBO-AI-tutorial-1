@@ -37,10 +37,12 @@ from __future__ import annotations
 
 import os
 import re
-from datetime import date
 from pathlib import Path
 
 from openai import AsyncOpenAI
+
+from demo_clock import today_iso
+from loop_state import TokenSplit, openai_usage
 
 
 _LAB_ROOT = Path(__file__).parent
@@ -138,10 +140,9 @@ def _tools_catalogue_fallback() -> str:
 - get_refund_history — all prior refunds, with refund_percentage per entry
 - update_shipping_address — change address (only if not shipped)
 - cancel_order — cancel (only if not shipped). Does NOT auto-refund.
-- issue_refund — refund as a percentage of the order total
+- issue_refund — refund as a percentage of the order total, under a checked reason_code
 - escalate_to_human — open a human ticket
-- list_policies — list every policy in the knowledge base
-- get_policy — fetch one policy in full by id
+- check_policy — retrieve and apply relevant policies to specific verified case facts
 - append_memory — one short note to this customer's episodic memory
 - compact_memory — rewrite the episodic memory file"""
 
@@ -162,7 +163,7 @@ def _planner_system_prompt(
     skills-related rule are all dropped — the planner can't suggest a
     skill the main agent has no way to load.
     """
-    today = date.today().isoformat()
+    today = today_iso()
 
     skills_on = skills_catalogue is not None
     skills_output_field = (
@@ -222,7 +223,7 @@ async def plan_for_prompt(
     skills_catalogue: str | None = None,
     policies_catalogue: str | None = None,
     skills_enabled: bool = True,
-) -> str:
+) -> tuple[str, TokenSplit]:
     """Generate a <plan> block for the customer's next-turn message.
 
     Args:
@@ -248,8 +249,11 @@ async def plan_for_prompt(
             agent has no way to load.
 
     Returns:
-        A string containing exactly one <plan>...</plan> block, ready to
-        prepend to the customer message before invoking the main agent.
+        `(plan, usage)` — a string containing exactly one <plan>...</plan>
+        block, ready to prepend to the customer message before invoking the
+        main agent, and this call's `TokenSplit`. The planner runs outside the
+        agent loop, so its spend is reported with the turn rather than metered
+        against the loop's total-token budget.
     """
     tools = tools_catalogue if tools_catalogue is not None else _tools_catalogue_fallback()
     if skills_enabled:
@@ -267,4 +271,4 @@ async def plan_for_prompt(
         ],
         temperature=0.2,
     )
-    return (response.choices[0].message.content or "").strip()
+    return (response.choices[0].message.content or "").strip(), openai_usage(response)

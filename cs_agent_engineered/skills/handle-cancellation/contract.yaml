@@ -8,7 +8,7 @@ required_criteria:
   - refund_committed
   - response_produced
 ordering:
-  - before: get_policy
+  - before: check_policy
     after: issue_refund
     violation: refund_was_attempted_before_policy_evidence
   - before: get_refund_history

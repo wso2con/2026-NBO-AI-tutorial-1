@@ -59,9 +59,33 @@ export interface RunArgs {
   // flip mid-session unlike skills/episodic.
   planner_enabled?: boolean;
   run_id?: string;
-  tool_budget?: number;
+  /** One grant's size, in total agent-loop tokens (input + output). */
+  token_budget?: number;
+  /** Answers a `budget_grant_required` pause: resume `run_id` with one more
+   *  grant (true) rather than starting a new task. */
+  budget_grant?: boolean;
+  /** Answers a `write_confirmation_required` pause holding a single write:
+   *  run it (true) or cancel it (false). Either way the parked loop resumes. */
+  confirm?: boolean;
+  /** Answers a `write_confirmation_required` pause per parked write, keyed by
+   *  interrupt id. Used whenever the model queued more than one write, so an
+   *  approval of one never carries the others with it. */
+  confirm_decisions?: Record<string, boolean>;
   signal?: AbortSignal;
   onEvent: (ev: AgentEvent) => void;
+}
+
+/** Tell the service the customer chose Stop on a paused task, so the pause
+ *  doesn't linger and make the next message ambiguous. No agent runs. */
+export async function stopPausedTask(
+  svc: AgentService,
+  args: { customer_id: string; run_id?: string },
+): Promise<void> {
+  await fetch(`${svc.baseUrl}/api/budget_stop`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(args),
+  });
 }
 
 /** POST /api/run and stream SSE events through `onEvent`. */
@@ -83,7 +107,10 @@ export async function runAgent(svc: AgentService, args: RunArgs): Promise<void> 
         ? { planner_enabled: args.planner_enabled }
         : {}),
       ...(args.run_id ? { run_id: args.run_id } : {}),
-      ...(args.tool_budget !== undefined ? { tool_budget: args.tool_budget } : {}),
+      ...(args.token_budget !== undefined ? { token_budget: args.token_budget } : {}),
+      ...(args.budget_grant !== undefined ? { budget_grant: args.budget_grant } : {}),
+      ...(args.confirm !== undefined ? { confirm: args.confirm } : {}),
+      ...(args.confirm_decisions ? { confirm_decisions: args.confirm_decisions } : {}),
     }),
     signal: args.signal,
   });
@@ -268,25 +295,4 @@ export async function fetchSession(
   }
   const body = (await response.json()) as { turns?: RestoredTurn[] };
   return body.turns ?? [];
-}
-
-export interface EvaluationSuite {
-  results: Array<{
-    scenario_id: string;
-    case: string;
-    kind: "outcome_and_trajectory";
-    first_cut: { passed: boolean };
-    engineered: { passed: boolean };
-    expected_behavior: { first_cut: string; engineered: string };
-    outcome_assertions: Array<{ name: string; passed: boolean }>;
-    trajectory_assertions: Array<{ name: string; passed: boolean }>;
-    evidence: Record<string, unknown>;
-  }>;
-  summary: { first_cut: number; engineered: number; total: number };
-}
-
-export async function runEvaluationSuite(): Promise<EvaluationSuite> {
-  const response = await fetch(`${AGENTS.engineered.baseUrl}/api/evaluations/run`, { method: "POST" });
-  if (!response.ok) throw new Error(`evaluation suite returned ${response.status}`);
-  return (await response.json()) as EvaluationSuite;
 }

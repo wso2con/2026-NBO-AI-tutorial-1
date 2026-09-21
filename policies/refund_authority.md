@@ -6,35 +6,40 @@ keywords: [refund, refund limit, high value, approval, escalate, cap]
 
 # Refund authority limits and when to escalate for approval
 
-AI agents may issue refunds up to their scoped cap (the `refund_cap_usd` field
-in their `agent-profile.yaml`; default $200). Refunds above the cap **MUST** be
-escalated to a human agent with priority `normal` or higher.
+## Delegated authority
 
-## Anti-split rule (audit-flagged)
+An automated support agent may issue a refund only when both the underlying
+category policy permits it and the resulting dollar amount is within the
+agent's configured `refund_cap_usd`. The standard configuration is $200, but
+the configured value supplied by the runtime is authoritative. The cap is an
+authority boundary, not an entitlement: being below it does not make an
+otherwise ineligible refund permissible.
 
-Splitting a single refund event into multiple smaller refunds to dodge the cap
-is **explicitly prohibited**. If a customer needs $1,600 refunded for damaged
-chairs, the agent must escalate the full $1,600 — not issue 8 calls of $200.
+The amount tested against the cap is the amount of the proposed transaction,
+calculated from the order total and the percentage currently being issued.
+Prior refunds are handled separately by the net-entitlement rules in
+`refund_calculation`; they must be inspected so the same entitlement is not
+paid twice.
 
-Splits are detected in the audit ledger (multiple refunds on the same order_id
-within a short window) and flagged as policy violations.
+## Above-cap cases
 
-## Agent action
+When the proposed refund exceeds the configured cap, the agent must not issue
+any part of it. Escalate the complete request to a human at priority `normal`
+or higher. The escalation record must identify the customer, exact order,
+applicable category policy, reason for the requested refund, requested
+percentage, and calculated dollar amount.
 
-Before issuing any non-trivial refund, mentally check:
-- Is this above my cap? → escalate with the FULL amount, do not attempt.
-- Have I already issued a refund on this order this session? → check the
-  customer's refund history and the audit context before double-refunding.
+Splitting one requested refund into multiple smaller payments, reducing the
+percentage merely to fit the cap, changing the reason code, or asking the
+customer to submit the same claim again is prohibited. A cap rejection from a
+tool or service is final for the automated agent. Do not retry the refund with
+a smaller amount even if a smaller amount would independently fall below the
+cap.
 
-If a refund attempt returns a `policy_violation` (code 403) with a
-`remediation` of `escalate_to_human`, that's the cap rejecting the call.
-This is a **permanent** error — do NOT retry with smaller amounts. Escalate.
+## Relationship to other policies
 
-## Escalation context to include
-
-When escalating, the human picking up the ticket should not need to
-re-investigate. Include:
-- Customer ID + name
-- Order ID + total + damage / delay context
-- The reason the refund is warranted (per which policy)
-- The requested refund amount
+This policy is evaluated after category eligibility and net entitlement are
+known, but it governs whether the automated agent may execute the resulting
+transaction. A human escalation does not itself approve or issue a refund.
+Customer tier, frustration, travel plans, prior inconvenience, or an agent's
+desire to resolve the case quickly do not expand delegated authority.

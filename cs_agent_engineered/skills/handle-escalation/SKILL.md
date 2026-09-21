@@ -11,14 +11,14 @@ Every escalation is a handoff to a human with zero context. The `reason` field i
 
 1. **Customer summary** — name and tier from `lookup_customer` ("Alex Martin, standard tier").
 2. **Orders touched this session** — IDs and statuses ("#1243 delivered_damaged, $58").
-3. **Relevant prior ledger entries** — refunds (`get_refund_history`), tickets (`get_open_tickets`). Reference past tickets explicitly ("cross-ref TICKET-1001, still open from 2026-05-01").
+3. **Relevant prior ledger entries** — refunds (`get_refund_history`), tickets (`get_open_tickets`). Reference past tickets explicitly ("cross-ref TICKET-1001, still open from 2026-09-10").
 4. **The specific customer ask** — quote or paraphrase the triggering message.
 5. **Why escalating** — pick one and name it: refund-exceeds-cap / customer-demands-human / unmet-prior-promise / policy-ambiguous / adversarial-input / repeat-pattern / unverified-claim.
 6. **What you already did** — tools run, policies consulted, conclusion reached. The human should not have to repeat the diagnostic loop.
 
 ## Priority selection
 
-**Policies dictate the priority for cases they cover.** Look them up via `list_policies` then `get_policy`, and use what they say — e.g. `refund_authority` requires `normal` or higher for over-cap; `damaged_item` requires `high` for safety / repeat issues. When no policy specifies:
+**Policies dictate the priority for cases they cover.** Ask `check_policy` using the verified case facts and use the priority in its decision brief — e.g. `refund_authority` requires `normal` or higher for over-cap; `refund_damaged_item` requires `high` for safety / repeat issues. When no policy specifies:
 
 - `low` — purely informational, no action expected. Rare.
 - `normal` — needs human action but no time pressure.
@@ -27,7 +27,7 @@ Every escalation is a handoff to a human with zero context. The `reason` field i
 
 ## High-level flow
 
-1. **Investigate first** — `lookup_customer`, `get_order`, `get_refund_history`, `get_open_tickets`, `list_policies` / `get_policy`. The reason field needs facts, not impressions.
+1. **Investigate first** — `lookup_customer`, `get_order`, `get_refund_history`, `get_open_tickets`, and `check_policy`. The reason field needs facts, not impressions.
 2. **Check the relevant policy** for any required priority.
 3. **Compose the reason** with all six required fields above.
 4. **Call `escalate_to_human(reason, priority)`** — `customer_id` is bound.

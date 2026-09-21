@@ -45,12 +45,13 @@ earns its keep.
 from __future__ import annotations
 
 from strands import Agent
-from strands.agent.conversation_manager import SlidingWindowConversationManager
+from strands.agent.conversation_manager import NullConversationManager
 from strands.models.openai import OpenAIModel
 from context_trace import ContextTraceHook
-from run_control import ToolBudgetHook
+from run_control import TokenBudgetHook
 
-from config import AGENT_ID, AGENT_NAME, CONVERSATION_WINDOW, MODEL_ID, REFUND_CAP_USD
+from config import AGENT_ID, AGENT_NAME, MODEL_ID, REFUND_CAP_USD
+from demo_clock import today_iso
 from tools import (
     escalate,
     get_customer_email,
@@ -67,6 +68,10 @@ from tools import (
 
 
 SYSTEM_PROMPT = f"""\
+Today's date is {today_iso()}. Use it whenever you reason about how old
+an order is, whether a delivery is overdue, or whether a window has closed —
+you have no other clock.
+
 You are {AGENT_NAME} (agent_id={AGENT_ID}), a helpful customer assistant
 for our e-commerce company. Help customers with order issues — late
 deliveries, damaged stuff, refunds, cancellations, address changes,
@@ -92,7 +97,7 @@ Process for most cases:
 3. Act — cancel, refund, or update the address as appropriate.
    You can check the knowledge base if you want background; escalate
    if anything feels off.
-4. Refer to policies when needed.
+4. Refer to policies before taking any action that moves money or changes an order (refund, credit, cancellation, address change), and before promising what a customer is entitled to. A purely informational answer (order status, account details) needs no policy lookup.
 5. Respects customers requests as much as possible. 
 6. If you're missing information, ask the customer for it directly
    instead of making assumptions or guessing. For example, if they
@@ -121,7 +126,9 @@ def build_agent(model: str | None = None) -> Agent:
         name=AGENT_NAME,
         description="Customer support agent (first-cut)",
         model=OpenAIModel(model_id=model or MODEL_ID),
-        conversation_manager=SlidingWindowConversationManager(window_size=CONVERSATION_WINDOW),
+        # Deliberately append-only: first-cut carries every prior message and
+        # raw tool observation until the provider's context limit is reached.
+        conversation_manager=NullConversationManager(),
         system_prompt=SYSTEM_PROMPT,
         tools=[
             get_order,
@@ -136,6 +143,6 @@ def build_agent(model: str | None = None) -> Agent:
             modify_order,
             escalate,
         ],
-        hooks=[ContextTraceHook(), ToolBudgetHook(mode="hard")],
+        hooks=[ContextTraceHook(), TokenBudgetHook(mode="hard")],
         callback_handler=None,
     )
