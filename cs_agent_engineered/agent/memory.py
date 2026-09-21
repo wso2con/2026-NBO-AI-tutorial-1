@@ -126,8 +126,7 @@ def append_memory(customer_id: str, note: str) -> dict:
     ("if she follows up, trace + escalate per policy") is policy recap and
     does NOT belong here — `handle-refund` + `check_policy` cover it.
 
-    `customer_id` is bound by the harness; pass an empty string or any
-    placeholder"""
+    The customer is bound by the system; pass "" for `customer_id`."""
     append(customer_id, note)
     return {"ok": True, "saved_for": customer_id}
 

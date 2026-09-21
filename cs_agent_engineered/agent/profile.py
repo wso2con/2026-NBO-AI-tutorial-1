@@ -150,7 +150,7 @@ def load_profile(path: Path = PROFILE_PATH) -> Profile:
     return Profile(
         agent_id=agent_section.get("id", "cs-agent-engineered"),
         name=agent_section.get("name", "Customer Support Agent"),
-        model=agent_section.get("model", "gpt-4o-2024-08-06"),
+        model=agent_section.get("model", "gpt-5.4-mini"),
         language=agent_section.get("language", "English"),
         system_prompt=agent_section.get("system_prompt") or _DEFAULT_SYSTEM_PROMPT,
         skills_dir=raw.get("skills_dir"),

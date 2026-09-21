@@ -7,5 +7,5 @@ required_criteria:
   - response_produced
 action_preconditions:
   - tool: issue_refund
-    requires: photo_evidence_received
+    requires: photo_evidence_requested
     violation: refund_was_attempted_without_photo_evidence

@@ -13,7 +13,7 @@ The refund workflow. `issue_refund` takes `refund_percentage` (a fraction in (0,
 2. **Look up the customer** — `lookup_customer`. Identity is bound at the harness; `customer_id` is force-set regardless of what you pass.
 3. **Look up the order(s)** — `get_order(order_id)`. Note `total_usd`. On `ownership_mismatch` (code 403), do NOT act. If `total_usd` already exceeds your cap, you can stop here and escalate — no category lookup needed.
 4. **Identify the refund category** from the customer's message and the order state:
-   - Damaged on arrival → consult `damaged_item` policy
+   - Damaged on arrival → consult `refund_damaged_item` policy
    - Shipping delay (delivery still expected) → consult `shipping_delay` policy
    - Return within window (delivered, undamaged) → consult `return_window` policy
    - Cancellation refund → load `handle-cancellation` and follow it instead. **`cancel_order` MUST succeed BEFORE you call `issue_refund` on a cancellation.** Refunding first and then cancelling leaves a window where you've paid out on a still-active order; if the cancel later rejects (status changed mid-flow) you'd have to reverse the refund.
@@ -51,5 +51,5 @@ Novel cases — subscription proration, refund to a different payment method, gi
 ## Related policies (consulted by this skill)
 
 - `refund_calculation` — percentages by category and the net-refund formula.
-- `damaged_item`, `shipping_delay`, `return_window` — category-specific evidence and qualifying rules.
+- `refund_damaged_item`, `shipping_delay`, `return_window` — category-specific evidence and qualifying rules.
 - `refund_authority` — cap, anti-split, over-cap escalation.

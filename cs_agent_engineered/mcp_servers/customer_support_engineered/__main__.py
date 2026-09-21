@@ -367,7 +367,7 @@ def _refund_entitlement_error(order, reason_code: str) -> dict | None:
                 "remediation": "Check delivery_days_late on the order before claiming this code.",
             }
     elif reason_code == "return":
-        # `return_window`: damage claims follow `damaged_item` regardless of the
+        # `return_window`: damage claims follow `refund_damaged_item` regardless of the
         # window, so a damaged order cannot be refunded as a plain return.
         #
         # Known gap: the policy also requires the customer to have confirmed the

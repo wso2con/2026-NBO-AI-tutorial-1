@@ -100,7 +100,7 @@ memory:
 # Implemented in `planner.py` at the lab root (shared with cs_agent_first_cut).
 # Flip via the UI toggle for the demo.
 planner:
-  enabled: true
+  enabled: false
 
 # §4b / Closing — scoped identity. Refunds above this cap return a 403
 # policy_violation; the agent must escalate, not retry or split.

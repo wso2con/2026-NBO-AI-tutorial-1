@@ -18,7 +18,7 @@ The lab runs as three processes plus a set of shared lab-root modules and a post
 
 - **`web/`** — the **comparison UI**. Connects to both agents over HTTP, fans the same prompt out to both in parallel, and renders the two SSE streams side by side. Lets you swap models, customers, and the feature toggles (skills / memory on the engineered side; planner on both), plus arm a one-shot refund-service timeout. The merge happens in the browser; there's no dispatcher in the middle.
 
-- **Lab-root modules** — `planner.py`, `run_control.py` and `context_trace.py` are shared by BOTH agents, which put the repo root on `sys.path` and import from it. Neither agent depends on the other. The planner in particular is a harness pattern, not an engineered-only feature: it is available on both panels (with skills disabled on the first-cut side, which has no skills loader) and is **off by default** on both — flip it per panel in the UI.
+- **Lab-root modules** — `planner.py`, `run_control.py` and `context_trace.py` are shared by BOTH agents, which put the repo root on `sys.path` and import from it. Neither agent depends on the other. `budget_wrapup.py` and `context_compaction.py` live at the root for the same import reason but are used by the engineered agent only — they are the two controls the first-cut loop does not have. The planner in particular is a harness pattern, not an engineered-only feature: it is available on both panels (with skills disabled on the first-cut side, which has no skills loader) and is **off by default** on both — flip it per panel in the UI.
 
 - **`loop_state.py` and `policy_evaluator.py`** — shared run evidence and three independent post-turn LLM reviews: policy compliance, groundedness, and execution path. Both agents are judged from the customer request, observed tool trajectory, policies, and any task contract the agent actually loaded. Reviews annotate completed replies; they never gate them.
 
@@ -138,6 +138,11 @@ When the services aren't running:
 make reset
 ```
 
+That restores both agents' mock data from the seeds and clears non-seeded
+episodic memory. Conversation memory lives in the running services, so it is
+the one thing `make reset` cannot touch — starting the services gives you a
+fresh one anyway.
+
 If Bob's episodic memory was modified by `compact_memory()` during a demo:
 
 ```bash
@@ -187,17 +192,21 @@ Removes both venvs, `web/node_modules`, and build artifacts. Re-run `make instal
 ├── tests/                Loop-engineering tests
 │
 │   Lab-root modules — both agents put this directory on sys.path and
-│   import from it, so neither agent depends on the other:
+│   import from it, so neither agent depends on the other. Marked
+│   (engineered) where only the engineered agent imports it:
 ├── loop_state.py         Explicit run state and structured loop events
 ├── run_control.py        TokenBudgetHook — shared session token metering
-├── budget_wrapup.py      The one tool-free model call a paused turn is allowed;
-│                      reads session memory, output never re-enters it
+├── budget_wrapup.py      (engineered) The one tool-free model call a paused turn
+│                      is allowed; reads session memory, output never re-enters it
+├── context_compaction.py (engineered) Summarizes the oldest messages when the
+│                      next context would cross the auto-compact line
 ├── context_trace.py      ContextTraceHook — pre-model-call context capture
 ├── planner.py            Shared pre-LLM planner (agent-agnostic; off by default)
 ├── policy_evaluator.py   Shared post-turn LLM reviewers for both agents
 ├── session_view.py       Read-only view of a run's conversation and trace
 ├── demo_clock.py         Pinned demo clock, so dated scenarios stay reproducible
-├── reset.py              Reset script used when services aren't running
+├── reset.py              Reseeds both agents' mocks and clears non-seeded memory;
+│                      use it when the services aren't running
 │
 ├── Makefile              make install / dev / first-cut / engineered / web / reset / clean
 ├── .env.example          Copy to .env, paste OPENAI_API_KEY

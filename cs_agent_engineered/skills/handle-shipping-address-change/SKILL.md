@@ -1,9 +1,9 @@
 ---
 name: handle-shipping-address-change
-description: Load if user mentioned changing the shipping address - This explain show to proceed in such occasions.
+description: Load before changing a shipping address — how to survey every open order, partition by status, and confirm before writing.
 ---
 
-# handle-address-change
+# handle-shipping-address-change
 
 Shipping addresses live per-order; there is no account-level address. When the customer says "my address has changed," do NOT silently update every order — and do NOT update only the one they happened to mention while leaving the rest stale. Surface the full picture and let the customer decide.
 

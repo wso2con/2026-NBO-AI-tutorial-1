@@ -53,4 +53,4 @@ Every escalation is a handoff to a human with zero context. The `reason` field i
 - `escalate_to_human(reason, priority)` — the write.
 - `get_open_tickets(customer_id)` — check BEFORE opening a new ticket.
 - `get_refund_history(customer_id)` — cite in the reason.
-- Policies that set required priority: `refund_authority`, `damaged_item`.
+- Policies that set required priority: `refund_authority`, `refund_damaged_item`.
