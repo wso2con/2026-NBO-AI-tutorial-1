@@ -194,6 +194,15 @@ def build_parser(server_key: str) -> argparse.ArgumentParser:
         "leaves no trace and only uvicorn's own warnings appear.",
     )
     parser.add_argument(
+        "--http",
+        default=_env_default("MCP_HTTP_IMPL", "h11"),
+        choices=("h11", "httptools", "auto"),
+        help="uvicorn's HTTP protocol implementation (default: h11). `auto` prefers "
+        "httptools, which is faster but drops the body of any request carrying a "
+        "`Connection: Upgrade` header, answering it with a JSON parse error; h11 "
+        "serves those requests normally. See the note in serve().",
+    )
+    parser.add_argument(
         "--debug",
         action="store_true",
         default=_env_default("MCP_DEBUG", "") not in ("", "0", "false"),
@@ -310,7 +319,18 @@ def serve(mcp, server_key: str, argv: list[str] | None = None) -> int:
     import uvicorn
 
     try:
-        uvicorn.run(app, host=args.host, port=args.port, log_level=args.log_level)
+        # h11 rather than uvicorn's usual httptools. A client that offers an
+        # HTTP/2 upgrade -- `Connection: Upgrade` with a non-websocket token,
+        # which some clients and many proxies send unprompted -- makes
+        # httptools treat the rest of the connection as upgrade traffic, so
+        # the app is handed a POST with no body and answers a -32700 parse
+        # error. The client sees its session die on a request it sent
+        # correctly. h11 declines the upgrade and serves the request. Both
+        # still log uvicorn's "Unsupported upgrade request" warning, which on
+        # h11 really is just noise. httptools is the faster parser, and
+        # --http httptools takes it back where that matters more than talking
+        # to clients you do not control.
+        uvicorn.run(app, host=args.host, port=args.port, log_level=args.log_level, http=args.http)
     except KeyboardInterrupt:
         print("\nstopped.")
     return 0
