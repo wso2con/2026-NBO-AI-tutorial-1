@@ -56,11 +56,15 @@ const TOKEN_BUDGET_OPTIONS = [4000, 8000, 16000, 40000, 80000, 160000];
 // engineered only. The line at which the harness summarizes the oldest
 // messages instead of letting the next call's context keep growing, measured
 // in the same projected input tokens the context bars are drawn in. 0 is off.
-// The options start above the agent's own fixed surface (system prompt + tool
-// contracts, a few thousand tokens): a line below that can never be met, so
-// offering one would only compact on every call and save nothing.
+//
+// The options are scaled to what this demo actually reaches. The agent's fixed
+// surface (system prompt + tool contracts) measures ~2.6k tokens, and the mock
+// backends return small observations, so even a deliberately broad "review my
+// whole account" turn peaks near 4.3k. A line has to clear the fixed surface
+// with room to be meetable at all, and has to sit under ~6k to be crossed
+// inside a turn or two — otherwise the control looks broken on stage.
 const DEFAULT_COMPACT_AT = 0;
-const COMPACT_AT_OPTIONS = [0, 8000, 12000, 20000, 40000];
+const COMPACT_AT_OPTIONS = [0, 4000, 6000, 10000, 20000];
 
 function resultIsError(result: unknown): boolean {
   if (result && typeof result === "object" && !Array.isArray(result)) {

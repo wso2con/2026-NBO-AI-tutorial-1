@@ -651,7 +651,7 @@ function ContextBars({
       <div className="mb-1.5 flex flex-wrap gap-x-3 gap-y-1 text-[9px]">
         <span className="inline-flex items-center gap-1">
           <span className="h-2 w-2 rounded-sm bg-violet-500/75" />
-          system + tools (first-call baseline)
+          system + tools
         </span>
         <span className="inline-flex items-center gap-1">
           <span className="h-2 w-2 rounded-sm bg-sky-500/75" />
