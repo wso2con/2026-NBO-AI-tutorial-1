@@ -5,16 +5,21 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock, patch
 
+from context_compaction import CompactAt, MessageWindow, projected_input_tokens
 from loop_state import (
     RunStore,
     context_snapshot,
     grant_budget,
     token_ceiling,
     token_warning_threshold,
+    record_compaction,
     record_iteration,
     record_tool_call,
+    record_human_decision,
+    record_observation,
 )
-from mocks.client import CustomerSupportClient, reset_data_files
+from run_control import TokenBudgetHook
+from mocks.client import CustomerSupportClient, arm_fault, reset_data_files
 from policy_evaluator import (
     ASPECTS as EVALUATION_ASPECTS,
     _normalize as normalize_aspect_result,
@@ -214,6 +219,84 @@ class LoopStateTests(unittest.TestCase):
         self.assertEqual(run.dump()["token_budget_used_percent"], 90)
         # The last tenth is what pays for the wrap-up call.
         self.assertEqual(run.dump()["tokens_remaining"], 300)
+
+    def test_a_parked_write_is_one_row_not_two(self) -> None:
+        """The re-dispatch after human approval is the same call, not a retry.
+
+        `BeforeToolCallEvent` fires once before the confirmation interrupt and
+        again on resume. Counted twice, the trajectory grows a resultless ghost
+        row that reads to a reviewer as a failed attempt.
+        """
+        store = RunStore()
+        run = store.start(
+            run_id="run-confirm",
+            customer_id="cust_001",
+            goal="change my delivery address",
+            token_budget=20_000,
+        )
+        # First pass: the model's raw args, before the binding hook fills in
+        # the trusted customer_id, and before the interrupt stops the call.
+        record_tool_call(
+            run,
+            "update_shipping_address",
+            {"customer_id": "", "order_id": "1240"},
+            tool_use_id="tu_1",
+        )
+        record_human_decision(
+            run, tool_name="update_shipping_address", approved=True, tool_use_id="tu_1"
+        )
+        # Resume: same toolUseId, bound args, and this time it runs.
+        record_tool_call(
+            run,
+            "update_shipping_address",
+            {"customer_id": "cust_001", "order_id": "1240"},
+            tool_use_id="tu_1",
+        )
+        record_observation(
+            run,
+            tool_name="update_shipping_address",
+            observation={"ok": True, "ref": "addr_0004"},
+            tool_use_id="tu_1",
+        )
+
+        calls = [item for item in run.tool_history if item["name"] == "update_shipping_address"]
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(run.tool_call_count, 1)
+        self.assertEqual(calls[0]["args"]["customer_id"], "cust_001")
+        self.assertEqual(calls[0]["result"], {"ok": True, "ref": "addr_0004"})
+        approval = [item for item in run.tool_history if item["name"] == "human_approval"]
+        self.assertEqual(approval[0]["result"], {"approved": True})
+        self.assertEqual(approval[0]["args"]["gated_tool"], "update_shipping_address")
+
+    def test_parallel_writes_keep_their_own_results(self) -> None:
+        """Two writes in one turn differ only by argument, so pair them by id."""
+        store = RunStore()
+        run = store.start(
+            run_id="run-parallel",
+            customer_id="cust_001",
+            goal="change my delivery address",
+            token_budget=20_000,
+        )
+        record_tool_call(run, "update_shipping_address", {"order_id": "1240"}, tool_use_id="tu_a")
+        record_tool_call(run, "update_shipping_address", {"order_id": "1241"}, tool_use_id="tu_b")
+        # Out of order on purpose: results do not have to come back in the
+        # order the calls were issued.
+        record_observation(
+            run,
+            tool_name="update_shipping_address",
+            observation={"ref": "addr_0005"},
+            tool_use_id="tu_b",
+        )
+        record_observation(
+            run,
+            tool_name="update_shipping_address",
+            observation={"ref": "addr_0004"},
+            tool_use_id="tu_a",
+        )
+
+        by_order = {item["args"]["order_id"]: item["result"]["ref"] for item in run.tool_history}
+        self.assertEqual(by_order, {"1240": "addr_0004", "1241": "addr_0005"})
+        self.assertEqual(run.tool_call_count, 2)
 
     def test_budget_grant_resumes_the_same_task_with_a_bigger_ceiling(self) -> None:
         """A "yes" must not clear the meter, or the task could never finish."""
@@ -583,6 +666,22 @@ class RefundEntitlementTests(unittest.TestCase):
         self.assertTrue(result.get("ok"), result)
         self.assertEqual(result.get("reason_code"), "damaged")
 
+    def test_refund_timeout_is_structured_and_does_not_commit(self) -> None:
+        server = self._server()
+        arm_fault(server._identity.agent_id, "refund_service_timeout")
+        result = server.issue_refund("cust_001", "1244", 1.0, "damaged", "test")
+        writes = [
+            entry
+            for entry in server._client.ledger_entries()
+            if entry.get("actor_agent_id") == server._identity.agent_id
+            and entry.get("kind") == "refund"
+        ]
+        self.assertEqual(result.get("error"), "service_timeout")
+        self.assertEqual(result.get("outcome"), "not_committed")
+        self.assertFalse(result.get("retryable"))
+        self.assertEqual(result.get("remediation"), "escalate_to_human")
+        self.assertEqual(len(writes), 0)
+
     def test_no_reason_code_launders_a_blocked_damage_claim(self) -> None:
         """The property the whole design rests on: an agent blocked on
         `damaged` cannot re-claim the same refund under another code."""
@@ -622,3 +721,168 @@ class RefundEntitlementTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class AutoCompactionTests(unittest.TestCase):
+    """The compaction dial: when it fires, what it spares, what it reports."""
+
+    def _agent(self, messages: list, run) -> SimpleNamespace:
+        """An agent stand-in with the three surfaces the pipeline reads."""
+
+        async def count_tokens(msgs, tool_specs=None, system_prompt=None, **_):
+            # 10 tokens per message, plus a fixed system + tools surface, so a
+            # threshold can sit above the irreducible baseline the way a real
+            # one has to.
+            return 1_000 + 10 * len(msgs)
+
+        return SimpleNamespace(
+            messages=messages,
+            model=SimpleNamespace(count_tokens=count_tokens, context_window_limit=400_000),
+            tool_registry=SimpleNamespace(get_all_tool_specs=lambda: []),
+            system_prompt="system",
+            _active_run_state=run,
+        )
+
+    def _context(self, agent, overflow: bool = False) -> SimpleNamespace:
+        return SimpleNamespace(
+            messages=agent.messages, agent=agent, utilization=0.0, overflow=overflow, stash=None
+        )
+
+    def _run(self, compact_at: int | None):
+        store = RunStore()
+        return store.start(
+            run_id="run-compact",
+            customer_id="cust_001",
+            goal="a long task",
+            compact_at=compact_at,
+        )
+
+    def test_dial_off_never_summarizes(self) -> None:
+        run = self._run(None)
+        agent = self._agent([{"role": "user", "content": []} for _ in range(40)], run)
+        inner = AsyncMock(return_value=True)
+        strategy = CompactAt(SimpleNamespace(apply=inner))
+        acted = asyncio.run(strategy.apply(self._context(agent)))
+        self.assertFalse(acted)
+        inner.assert_not_awaited()
+        self.assertEqual(run.compactions, [])
+
+    def test_below_the_line_never_summarizes(self) -> None:
+        run = self._run(10_000)
+        agent = self._agent([{"role": "user", "content": []} for _ in range(20)], run)
+        inner = AsyncMock(return_value=True)
+        acted = asyncio.run(CompactAt(SimpleNamespace(apply=inner)).apply(self._context(agent)))
+        self.assertFalse(acted)
+        inner.assert_not_awaited()
+
+    def test_crossing_the_line_summarizes_and_reports_the_saving(self) -> None:
+        run = self._run(2_000)
+        messages = [{"role": "user", "content": []} for _ in range(120)]
+        agent = self._agent(messages, run)
+
+        async def summarize(context):
+            del context.messages[: len(context.messages) - 5]
+            return True
+
+        acted = asyncio.run(CompactAt(SimpleNamespace(apply=summarize)).apply(self._context(agent)))
+        self.assertTrue(acted)
+        self.assertEqual(len(run.compactions), 1)
+        entry = run.compactions[0]
+        self.assertEqual(entry["before_tokens"], 2_200)
+        self.assertEqual(entry["after_tokens"], 1_050)
+        self.assertEqual(entry["saved_tokens"], 1_150)
+        self.assertEqual(entry["messages_summarized"], 115)
+        # Keyed to the call it protects, which is the one the budget guard is
+        # about to count.
+        self.assertEqual(entry["call"], run.model_call_count + 1)
+
+    def test_a_context_still_above_the_line_is_not_compacted_twice(self) -> None:
+        """Otherwise every model call buys another summarization call to
+        re-summarize the summary the last one just wrote."""
+        # A line the compacted context is still above, so only the guard can
+        # stop the second pass.
+        run = self._run(1_000)
+        messages = [{"role": "user", "content": []} for _ in range(120)]
+        agent = self._agent(messages, run)
+
+        async def summarize(context):
+            del context.messages[: len(context.messages) - 5]
+            return True
+
+        strategy = CompactAt(SimpleNamespace(apply=summarize))
+        self.assertTrue(asyncio.run(strategy.apply(self._context(agent))))
+        # Still above the line, and a tool loop has added a call and its result
+        # — but folding those two in would save almost nothing.
+        agent.messages.extend({"role": "user", "content": []} for _ in range(2))
+        self.assertFalse(asyncio.run(strategy.apply(self._context(agent))))
+        # Once the context has grown materially past what the last compaction
+        # left behind, another pass is worth its model call.
+        agent.messages.extend({"role": "user", "content": []} for _ in range(120))
+        self.assertTrue(asyncio.run(strategy.apply(self._context(agent))))
+        self.assertEqual(len(run.compactions), 2)
+
+    def test_the_line_is_measured_against_the_providers_own_baseline(self) -> None:
+        """Strands' estimator roughly doubles this agent's tool contracts, so a
+        dial fed by the raw estimate would fire at half the context the console
+        is drawing. Once a call has completed, the exact fixed surface is known."""
+        run = self._run(10_000)
+        agent = self._agent([{"role": "user", "content": []} for _ in range(20)], run)
+        # 1,000 estimated fixed + 200 of messages: over the line on the estimate
+        # alone, but the provider says the fixed surface is really 300.
+        self.assertEqual(asyncio.run(projected_input_tokens(agent)), 1_200)
+        agent._fixed_context_baseline_tokens = 300
+        self.assertEqual(asyncio.run(projected_input_tokens(agent)), 1_500)
+
+    def test_a_real_overflow_compacts_even_with_the_dial_off(self) -> None:
+        run = self._run(None)
+        messages = [{"role": "user", "content": []} for _ in range(30)]
+        agent = self._agent(messages, run)
+
+        async def summarize(context):
+            del context.messages[:20]
+            return True
+
+        acted = asyncio.run(
+            CompactAt(SimpleNamespace(apply=summarize)).apply(self._context(agent, overflow=True))
+        )
+        self.assertTrue(acted)
+        self.assertTrue(run.compactions[0]["overflow"])
+
+    def test_the_budget_guard_meters_the_compacted_context(self) -> None:
+        """Strands projects the next call before hooks run, so the number it
+        hands the guard predates a compaction at the same event."""
+        run = self._run(2_000)
+        run.token_budget = 40_000
+        record_compaction(
+            run,
+            before_tokens=12_000,
+            after_tokens=3_000,
+            messages_before=40,
+            messages_after=6,
+            threshold=2_000,
+        )
+        agent = SimpleNamespace(_active_run_state=run)
+        event = SimpleNamespace(agent=agent, projected_input_tokens=12_000, cancel=None)
+        TokenBudgetHook(mode="graceful")._before_model(event)
+        self.assertEqual(run.projected_next_call_tokens, 3_000)
+        self.assertIsNone(event.cancel)
+
+    def test_the_session_window_stands_down_while_compaction_is_armed(self) -> None:
+        """Dropping the oldest messages and then summarizing what is left would
+        mean summarizing evidence that had already been deleted."""
+        run = self._run(10_000)
+        agent = self._agent([{"role": "user", "content": []} for _ in range(50)], run)
+        window = MessageWindow(window_size=4)
+        self.assertFalse(asyncio.run(window.apply(self._context(agent))))
+        self.assertEqual(len(agent.messages), 50)
+
+    def test_the_session_window_still_caps_when_the_dial_is_off(self) -> None:
+        run = self._run(None)
+        messages = [
+            {"role": "user", "content": [{"text": "hi"}]},
+            {"role": "assistant", "content": [{"text": "hello"}]},
+        ] * 15
+        agent = self._agent(messages, run)
+        window = MessageWindow(window_size=4)
+        self.assertTrue(asyncio.run(window.apply(self._context(agent))))
+        self.assertLessEqual(len(agent.messages), 5)

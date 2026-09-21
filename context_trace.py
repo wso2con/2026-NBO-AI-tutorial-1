@@ -6,7 +6,7 @@ import json
 from dataclasses import dataclass
 from typing import Any
 
-from strands.hooks import HookRegistry
+from strands.hooks import HookOrder, HookRegistry
 from strands.hooks.events import BeforeModelCallEvent
 
 
@@ -19,7 +19,13 @@ class ContextTraceHook:
     """Append a serializable context snapshot to the invoking Agent."""
 
     def register_hooks(self, registry: HookRegistry, **_: object) -> None:
-        registry.add_callback(BeforeModelCallEvent, self._capture)
+        # Last, so the snapshot is the context that actually goes out: the
+        # engineered loop's context pipeline may compact at this same event,
+        # and a snapshot taken before it would show messages the model never
+        # saw. Harmless in the first-cut loop, which has no pipeline.
+        registry.add_callback(
+            BeforeModelCallEvent, self._capture, order=HookOrder.DEFAULT + 20
+        )
 
     def _capture(self, event: BeforeModelCallEvent) -> None:
         agent = event.agent

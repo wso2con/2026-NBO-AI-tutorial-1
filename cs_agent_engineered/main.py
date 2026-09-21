@@ -52,6 +52,7 @@ from policy_evaluator import (
     aggregate_verdict,
     evaluate_turn,
 )
+from mocks.client import arm_fault
 from run_control import BUDGET_STOP_MARKER
 from loop_state import (
     RunStore,
@@ -62,6 +63,7 @@ from loop_state import (
     grant_budget,
     loop_tokens_used,
     record_iteration,
+    record_human_decision,
     record_observation,
     token_ceiling,
     token_warning_threshold,
@@ -317,6 +319,10 @@ async def _run_agent_stream(
     system_prompt_emitted = False
     agent._context_trace_snapshots = []
     emitted_contexts = 0
+    # Compactions are appended by the context pipeline from inside the event
+    # loop (see context_compaction.py), so they are drained alongside the
+    # context snapshots rather than emitted from the hook itself.
+    emitted_compactions = len(run_state.compactions)
 
     # tool_use_id -> {name, args}. Kept on the AGENT, not this coroutine, because
     # a HumanConfirmationHook interrupt splits one model cycle across two /api/run
@@ -355,6 +361,23 @@ async def _run_agent_stream(
             }
 
     async for event in agent.stream_async(prompt):
+        while emitted_compactions < len(run_state.compactions):
+            entry = run_state.compactions[emitted_compactions]
+            emitted_compactions += 1
+            yield {
+                "event": "context_compacted",
+                "data": json.dumps(
+                    {
+                        "run_id": run_state.run_id,
+                        "summary": (
+                            f"Context compacted before model call {entry['call']}: "
+                            f"{entry['messages_summarized']} messages summarized, "
+                            f"{entry['before_tokens']:,} → {entry['after_tokens']:,} tokens"
+                        ),
+                        **entry,
+                    }
+                ),
+            }
         snapshots = getattr(agent, "_context_trace_snapshots", [])
         while emitted_contexts < len(snapshots):
             snapshot = snapshots[emitted_contexts]
@@ -468,6 +491,23 @@ async def _run_agent_stream(
             "data": json.dumps({"content": agent.system_prompt or ""}),
         }
 
+    while emitted_compactions < len(run_state.compactions):
+        entry = run_state.compactions[emitted_compactions]
+        emitted_compactions += 1
+        yield {
+            "event": "context_compacted",
+            "data": json.dumps(
+                {
+                    "run_id": run_state.run_id,
+                    "summary": (
+                        f"Context compacted before model call {entry['call']}: "
+                        f"{entry['messages_summarized']} messages summarized, "
+                        f"{entry['before_tokens']:,} → {entry['after_tokens']:,} tokens"
+                    ),
+                    **entry,
+                }
+            ),
+        }
     snapshots = getattr(agent, "_context_trace_snapshots", [])
     while emitted_contexts < len(snapshots):
         snapshot = snapshots[emitted_contexts]
@@ -538,6 +578,13 @@ class RunRequest(BaseModel):
     planner_enabled: bool | None = None
     run_id: str | None = None
     token_budget: int | None = None
+    # Auto-compaction line, in projected input tokens for the next model call.
+    # Null or 0 leaves context to grow. Like `token_budget` and unlike
+    # `skills_enabled`, this is a live dial: it applies to the next model call
+    # of the session in flight, with no reset.
+    compact_at: int | None = None
+    # One-shot demo fault: the next refund service call times out pre-commit.
+    refund_service_timeout: bool = False
     # Answers to the two pauses the console renders inline, both structured
     # rather than read out of prose. `budget_grant` answers
     # `budget_grant_required`: the same run resumes with its ceiling raised.
@@ -672,6 +719,8 @@ async def run(req: RunRequest):
         planner_enabled=req.planner_enabled,
     )
     agent = get_agent(req.customer_id, effective_profile)
+    if req.refund_service_timeout:
+        arm_fault(PROFILE.agent_id, "refund_service_timeout")
 
     # Is this message the answer to a confirmation the agent is parked on?
     # If so it is not a new turn at all: it unblocks the tool call that is
@@ -750,6 +799,7 @@ async def run(req: RunRequest):
             "goal", req.prompt.strip()
         ),
         token_budget=req.token_budget,
+        compact_at=req.compact_at,
         resume=continue_approved,
         # A confirmation answer resumes the turn the customer is already
         # looking at — the console streams what follows into that same card —
@@ -915,6 +965,17 @@ async def run(req: RunRequest):
                 decided_by="harness",
             )
         if resume_payload is not None:
+            # Into the trajectory as well as the trace: the evaluators read
+            # `tool_history`, and a write whose consent is invisible there
+            # cannot be told apart from one that was never asked about.
+            for item in pending["interrupts"]:
+                record_human_decision(
+                    run_state,
+                    tool_name=item["tool"],
+                    approved=bool(decisions.get(item["id"])),
+                    tool_use_id=item.get("tool_use_id") or None,
+                    customer_reply=req.prompt,
+                )
             yield loop_event(
                 "human_approval",
                 run_state,
@@ -1003,7 +1064,16 @@ async def run(req: RunRequest):
                         tool_name=body.get("name", "tool"),
                         observation=body.get("result"),
                         is_error=bool(body.get("is_error")),
+                        tool_use_id=body.get("tool_use_id") or None,
                     )
+                    if "service_timeout" in json.dumps(body.get("result"), default=str):
+                        yield loop_event(
+                            "recovery",
+                            run_state,
+                            "Refund service timed out before completing the write",
+                            fault="refund_service_timeout",
+                            decision="escalate_without_retry",
+                        )
                     if body.get("name") == "skills":
                         skill_name = skill_calls.get(body.get("tool_use_id", ""), "")
                         contract = None

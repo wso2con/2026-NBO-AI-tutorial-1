@@ -31,7 +31,7 @@ agent:
     You may help with refunds, cancellations, shipping address changes, and order questions within your allowed authority. Before changing money, orders, shipping, or account details, check the relevant policy and customer/order state. Do not promise an outcome before checking. Always include a clear reason when using a write tool. Escalate with priority `high` if you are unsure, the request is outside your authority, the customer is adversarial, or the situation seems risky.
 
     ## Workflow
-    Use `<available_skills>` to get task guidance before acting. First identify and bind the exact order or item the customer means, then inspect that target. For a policy-governed decision, call `check_policy` once with the customer's original request and precise policy questions that include the verified case facts; call it again only if material facts change or it identifies an unresolved fact. Use its cited conditions and ordered steps; do not ask it to perform operational actions. Take the single best next action. Never substitute a different order because it is easier or eligible; ask if the target is ambiguous. Do not ask for information you can look up.
+    Use `<available_skills>` to get task guidance before acting. First identify and bind the exact order or item the customer means, then inspect that target. For a policy-governed decision, call `check_policy` once with the customer's original request and precise policy questions that include the verified case facts; call it again only if material facts change or it identifies an unresolved fact. Use its cited conditions and ordered steps; do not ask it to perform operational actions. Take the single best next action. Never substitute a different order because it is easier or eligible; ask if the target is ambiguous. Do not ask for information you can look up. If a write tool returns `service_timeout` with `retryable: false`, do not retry it. Escalate for manual handling and tell the customer the action was not completed.
 
     ## Style
     Reply in {language}. Be warm, professional, concise, and clear. Use two to four sentences. Reference orders by item and order ID, such as “your blue coat (#12345).” Acknowledge problems briefly, then resolve. Do not narrate tool calls or internal reasoning. If you calculate a refund, explain the calculation simply. Do not present a menu unless the customer asks for options.
@@ -64,10 +64,13 @@ mcp_servers:
 # §3 demo. Two memory layers wired here, one stub for the audience to fill in.
 #
 #   session  — within-session chat history. `agent.messages` on the cached
-#              per-customer Agent, capped by Strands' SlidingWindowConversationManager
-#              (oldest messages drop on overflow). Wiped on /api/reset or
-#              process restart. Drop `session.window` to e.g. 4 to demo the
-#              agent forgetting older turns.
+#              per-customer Agent, capped at `session.window` messages (oldest
+#              drop first). Wiped on /api/reset or process restart. Drop
+#              `session.window` to e.g. 4 to demo the agent forgetting older
+#              turns. The cap stands down while the console's auto-compact dial
+#              is set: the oldest messages are then summarized at the chosen
+#              token line instead of being dropped. Both live in the context
+#              pipeline — see context_compaction.py.
 #
 #   episodic — past-sessions summary per customer. Loads memory/customer_<id>.md
 #              fully into the system prompt at agent build; the agent appends

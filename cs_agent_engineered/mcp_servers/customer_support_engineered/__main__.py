@@ -41,7 +41,7 @@ from mcp.server.fastmcp import FastMCP
 
 from agent.identity import AgentIdentity
 from agent.profile import load_profile
-from mocks.client import CustomerSupportClient
+from mocks.client import CustomerSupportClient, consume_fault
 
 # Silence the MCP framework's INFO logs (otherwise every list_tools call
 # leaks into the on-stage trace).
@@ -131,6 +131,8 @@ def get_order(customer_id: str, order_id: str) -> dict:
     Returns `ownership_mismatch` if the order does not belong to the
     current customer. Do not retry with a different customer.
     """
+    if order_id.startswith("#"):
+        order_id = order_id[1:]
     o, err = _load_owned_order(customer_id, order_id)
     if err is not None:
         return err
@@ -386,7 +388,11 @@ def _refund_entitlement_error(order, reason_code: str) -> dict | None:
 
 @mcp.tool()
 def issue_refund(
-    customer_id: str, order_id: str, refund_percentage: float, reason_code: str, reason: str
+    customer_id: str,
+    order_id: str,
+    refund_percentage: float,
+    reason_code: str,
+    reason: str,
 ) -> dict:
     """Issue a refund for an order as a percentage of its total value.
 
@@ -458,6 +464,25 @@ def issue_refund(
             "code": 422,
             "reason_code": reason_code,
             **entitlement_error,
+        }
+
+    if consume_fault(_identity.agent_id, "refund_service_timeout"):
+        # Normalize the downstream transport failure at the MCP boundary. A
+        # raised Python exception would be flattened by MCP/Strands into an
+        # unstructured "Error executing tool" string. This structured result
+        # gives the agent safe, explicit recovery semantics.
+        return {
+            "error": "service_timeout",
+            "code": 504,
+            "outcome": "not_committed",
+            "retryable": False,
+            "detail": "The refund service timed out before accepting the write.",
+            "remediation": "escalate_to_human",
+            "agent_instruction": (
+                "Do not retry. Call escalate_to_human with priority high and explain that "
+                "the refund service timed out before the write was accepted. Only after the "
+                "ticket succeeds may you tell the customer it was escalated."
+            ),
         }
 
     ref = _client.issue_refund(

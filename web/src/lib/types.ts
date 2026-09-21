@@ -77,6 +77,23 @@ export interface TurnUsage {
     dynamic_context_tokens: number;
   }>;
   tool_calls: number;
+  /** engineered only — the auto-compaction line in force for this session, in
+   *  projected input tokens for the next model call. Null / absent means the
+   *  dial was off and context was left to grow. */
+  compact_at_tokens?: number | null;
+  /** engineered only — one entry per compaction the harness performed this
+   *  turn, keyed to the model call it protected. */
+  compactions?: Array<{
+    call: number;
+    threshold_tokens: number;
+    before_tokens: number;
+    after_tokens: number;
+    saved_tokens: number;
+    messages_before: number;
+    messages_after: number;
+    messages_summarized: number;
+    overflow: boolean;
+  }>;
 }
 
 /** A turn that ended holding work it will not do without a human decision.
@@ -152,6 +169,9 @@ export type LoopEventType =
   // engineered only — the harness paused a write tool and asked the customer
   // to confirm it, then recorded their yes / no on the next message.
   | "human_approval"
+  // engineered only — the context pipeline summarized the oldest messages
+  // before a model call because projected context crossed the operator's line.
+  | "context_compacted"
   | "state_transition"
   | "loop_decision"
   | "recovery"

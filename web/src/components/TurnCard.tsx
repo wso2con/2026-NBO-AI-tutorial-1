@@ -219,8 +219,7 @@ export function TurnCard({ turn, isLatest, onAnswerPause, pauseBusy }: Props) {
             {turn.evaluation && <ReviewChip evaluation={turn.evaluation} />}
           </div>
           <Markdown density="reply">{reply}</Markdown>
-          {turn.usage && <UsageLine usage={turn.usage} />}
-          {turn.usage && <ContextBars usage={turn.usage} />}
+          {turn.usage && <UsageFooter usage={turn.usage} />}
         </div>
       )}
 
@@ -561,11 +560,32 @@ function ApprovalRow({
   );
 }
 
+/** Usage stats for this turn, with the per-call context breakdown folded away
+ *  behind them: the bars are a teaching aid, opened when someone asks how the
+ *  context grew, not a permanent fixture under every reply. */
+function UsageFooter({ usage }: { usage: TurnUsage }) {
+  const calls = contextBarData(usage);
+  if (calls.length === 0) return <UsageLine usage={usage} />;
+  return (
+    <Collapsible>
+      <CollapsibleTrigger className="group w-full text-left">
+        <UsageLine usage={usage} expandable />
+      </CollapsibleTrigger>
+      <CollapsibleContent className="overflow-hidden data-[state=open]:animate-accordion-down data-[state=closed]:animate-accordion-up">
+        <ContextBars calls={calls} compactions={usage.compactions ?? []} />
+      </CollapsibleContent>
+    </Collapsible>
+  );
+}
+
 /** Cumulative loop usage for this chat session. */
-function UsageLine({ usage }: { usage: TurnUsage }) {
+function UsageLine({ usage, expandable }: { usage: TurnUsage; expandable?: boolean }) {
   const overBudget = usage.budget_used_percent >= 90;
   return (
     <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 border-t pt-1.5 text-[10px] tabular-nums text-muted-foreground">
+      {expandable && (
+        <ChevronRight className="h-3 w-3 shrink-0 transition-transform group-data-[state=open]:rotate-90" />
+      )}
       <span title="Cumulative agent-loop input plus output for this chat session.">
         <span className={cn("font-medium", overBudget && "text-amber-600 dark:text-amber-500")}>
           {usage.loop_total_tokens.toLocaleString()}
@@ -580,6 +600,18 @@ function UsageLine({ usage }: { usage: TurnUsage }) {
       <span>
         {usage.model_calls} model {usage.model_calls === 1 ? "call" : "calls"} this turn
       </span>
+      {Boolean(usage.compactions?.length) && (
+        <span
+          className="text-emerald-600 dark:text-emerald-500"
+          title={`Context crossed the auto-compact line; the oldest messages were summarized. The summarization call is harness work and is not metered against the loop budget.`}
+        >
+          compacted {usage.compactions!.length}× · saved{" "}
+          {usage
+            .compactions!.reduce((total, item) => total + item.saved_tokens, 0)
+            .toLocaleString()}{" "}
+          tokens
+        </span>
+      )}
     </div>
   );
 }
@@ -587,8 +619,8 @@ function UsageLine({ usage }: { usage: TurnUsage }) {
 /** Exact provider-reported total input for every completed model call. The
  * fixed segment is anchored to the first exact call minus its small estimated
  * user message; later message/observation context is the exact remainder. */
-function ContextBars({ usage }: { usage: TurnUsage }) {
-  const calls = (usage.model_call_usage ?? [])
+function contextBarData(usage: TurnUsage) {
+  return (usage.model_call_usage ?? [])
     .map((item) => ({
       call: item.call,
       tokens: item.input_tokens,
@@ -599,8 +631,15 @@ function ContextBars({ usage }: { usage: TurnUsage }) {
       ),
     }))
     .filter((item) => item.tokens > 0);
+}
 
-  if (calls.length === 0) return null;
+function ContextBars({
+  calls,
+  compactions,
+}: {
+  calls: ReturnType<typeof contextBarData>;
+  compactions: NonNullable<TurnUsage["compactions"]>;
+}) {
   const max = Math.max(...calls.map((item) => item.tokens), 1);
 
   return (
@@ -621,23 +660,42 @@ function ContextBars({ usage }: { usage: TurnUsage }) {
       </div>
       <div className="flex flex-col gap-1">
         {calls.map((item) => (
-          <div key={item.call} className="grid grid-cols-[34px_1fr_52px] items-center gap-2 tabular-nums">
-            <span>call {item.call}</span>
-            <div className="h-1.5 overflow-hidden rounded-full bg-muted">
-              <div
-                className="flex h-full min-w-[3px] overflow-hidden rounded-full"
-                style={{ width: `${Math.max(2, (item.tokens / max) * 100)}%` }}
-                title={`System + tools baseline: ${item.fixed.toLocaleString()} · Messages + observations: ${item.dynamic.toLocaleString()}`}
-              >
+          <Fragment key={item.call}>
+            {compactions
+              .filter((event) => event.call === item.call)
+              .map((event) => (
                 <div
-                  className="h-full bg-violet-500/75"
-                  style={{ width: `${item.tokens ? (item.fixed / item.tokens) * 100 : 0}%` }}
-                />
-                <div className="h-full flex-1 bg-sky-500/75" />
+                  key={`compaction-${event.call}`}
+                  className="grid grid-cols-[34px_1fr_52px] items-center gap-2 text-[9px] text-emerald-600 dark:text-emerald-500"
+                >
+                  <span />
+                  <span className="truncate">
+                    compacted: {event.messages_summarized} messages summarized
+                    {event.overflow ? " (context overflow)" : ""}
+                  </span>
+                  <span className="text-right tabular-nums">
+                    −{event.saved_tokens.toLocaleString()}
+                  </span>
+                </div>
+              ))}
+            <div className="grid grid-cols-[34px_1fr_52px] items-center gap-2 tabular-nums">
+              <span>call {item.call}</span>
+              <div className="h-1.5 overflow-hidden rounded-full bg-muted">
+                <div
+                  className="flex h-full min-w-[3px] overflow-hidden rounded-full"
+                  style={{ width: `${Math.max(2, (item.tokens / max) * 100)}%` }}
+                  title={`System + tools baseline: ${item.fixed.toLocaleString()} · Messages + observations: ${item.dynamic.toLocaleString()}`}
+                >
+                  <div
+                    className="h-full bg-violet-500/75"
+                    style={{ width: `${item.tokens ? (item.fixed / item.tokens) * 100 : 0}%` }}
+                  />
+                  <div className="h-full flex-1 bg-sky-500/75" />
+                </div>
               </div>
+              <span className="text-right">{item.tokens.toLocaleString()}</span>
             </div>
-            <span className="text-right">{item.tokens.toLocaleString()}</span>
-          </div>
+          </Fragment>
         ))}
       </div>
     </div>

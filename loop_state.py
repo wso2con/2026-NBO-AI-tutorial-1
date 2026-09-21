@@ -108,6 +108,14 @@ class RunState:
     auxiliary_output_tokens: int = 0
     auxiliary_input_tokens: int = 0
     budget_warning_ratio: float = 0.9
+    # Auto-compaction line for this session, in projected input tokens for the
+    # next model call. None or 0 means the dial is off and context grows
+    # untouched. Set per request, so it can change between turns of one task.
+    compact_at_tokens: int | None = None
+    # One entry per compaction the harness performed this turn: what the next
+    # call would have cost, what it costs now, and how many messages were
+    # folded into the summary.
+    compactions: list[dict[str, Any]] = field(default_factory=list)
     # Set by the graceful guard when the warning threshold is crossed: no more
     # tool dispatches, one last model call to report status and ask the human.
     budget_wrapup: bool = False
@@ -151,6 +159,7 @@ class RunStore:
         customer_id: str,
         goal: str,
         token_budget: int | None = None,
+        compact_at: int | None = None,
         scenario_id: str | None = None,
         resume: bool = False,
         continue_turn: bool = False,
@@ -188,7 +197,12 @@ class RunStore:
                 run.tool_call_count = 0
                 run.model_call_count = 0
                 run.model_call_usage = []
+                run.compactions = []
                 run.projected_next_call_tokens = 0
+            # The compaction line is a live control, not a property of the task:
+            # a presenter who lowers it mid-session means the next model call,
+            # not the next chat.
+            run.compact_at_tokens = int(compact_at) if compact_at else None
             # Always cleared: the guard's verdict belongs to the model call
             # about to happen, not to the one that set it.
             run.budget_wrapup = False
@@ -271,16 +285,100 @@ def record_iteration(run: RunState) -> None:
 
 
 def record_tool_call(
-    run: RunState, tool_name: str, args: dict[str, Any] | None = None
+    run: RunState,
+    tool_name: str,
+    args: dict[str, Any] | None = None,
+    tool_use_id: str | None = None,
 ) -> None:
+    """Record one dispatch, keyed by the model's `toolUseId`.
+
+    Keyed rather than appended, because `BeforeToolCallEvent` fires more than
+    once for the same call. A write parked by `HumanConfirmationHook` raises
+    out of the event loop on the first pass and is re-dispatched on resume, so
+    a naive append leaves a ghost row behind: same tool, same target, no
+    result. A reviewer reading the trajectory sees a failed attempt that was
+    then retried, and reports a wasteful path that never happened.
+
+    The re-dispatch also carries better arguments than the first pass did.
+    `CustomerIdBindingHook` runs after this callback and fills the trusted
+    `customer_id` into the input dict, so the first snapshot shows the model's
+    raw proposal (often an empty id) and the second shows what was actually
+    sent. Refreshing the args on the repeat keeps the row honest.
+    """
+    snapshot = dict(args or {})
+    if tool_use_id:
+        for item in run.tool_history:
+            if item.get("tool_use_id") == tool_use_id:
+                item["args"] = snapshot
+                return
     run.tool_call_count += 1
     run.progress[f"called:{tool_name}"] = "done"
     run.tool_history.append(
         {
             "name": tool_name,
-            "args": dict(args or {}),
+            "tool_use_id": tool_use_id,
+            "args": snapshot,
             "result": None,
             "is_error": None,
+        }
+    )
+
+
+def record_compaction(
+    run: RunState,
+    *,
+    before_tokens: int,
+    after_tokens: int,
+    messages_before: int,
+    messages_after: int,
+    threshold: int,
+    overflow: bool = False,
+) -> dict[str, Any]:
+    """Record one compaction and return the entry, for the trace to announce.
+
+    Keyed to the model call it protects: `model_call_count` is incremented by
+    the budget guard, which runs after the context pipeline, so the call being
+    prepared right now is the next one. That lets the guard meter the context
+    that actually went out rather than the projection it was handed before
+    compaction ran.
+    """
+    entry = {
+        "call": run.model_call_count + 1,
+        "threshold_tokens": int(threshold),
+        "before_tokens": int(before_tokens),
+        "after_tokens": int(after_tokens),
+        "saved_tokens": max(0, int(before_tokens) - int(after_tokens)),
+        "messages_before": int(messages_before),
+        "messages_after": int(messages_after),
+        "messages_summarized": max(0, int(messages_before) - int(messages_after)),
+        "overflow": bool(overflow),
+    }
+    run.compactions.append(entry)
+    return entry
+
+
+def record_human_decision(
+    run: RunState,
+    *,
+    tool_name: str,
+    approved: bool,
+    tool_use_id: str | None = None,
+    customer_reply: str = "",
+) -> None:
+    """Put the consent step in the trajectory, between the call and its result.
+
+    Approval is an event in the path the agent took, not harness bookkeeping.
+    Without it the evaluators read a write that simply happened, and cannot
+    tell an authorised change from an unauthorised one — nor see that two
+    writes were approved separately rather than batched behind one yes.
+    """
+    run.tool_history.append(
+        {
+            "name": "human_approval",
+            "tool_use_id": tool_use_id,
+            "args": {"gated_tool": tool_name, "customer_reply": customer_reply},
+            "result": {"approved": approved},
+            "is_error": False,
         }
     )
 
@@ -291,10 +389,22 @@ def record_observation(
     tool_name: str,
     observation: Any,
     is_error: bool = False,
+    tool_use_id: str | None = None,
 ) -> None:
-    """Record backend evidence that can satisfy harness postconditions."""
+    """Record backend evidence that can satisfy harness postconditions.
+
+    Matched on `toolUseId` where the harness has one. Two writes issued in the
+    same model turn differ only in their arguments, so pairing them to results
+    by tool name alone can attach an outcome to the wrong call.
+    """
     run.progress["latest_tool"] = tool_name
     run.progress["latest_observation"] = "error" if is_error else "observed"
+    if tool_use_id:
+        for item in run.tool_history:
+            if item.get("tool_use_id") == tool_use_id:
+                item["result"] = observation
+                item["is_error"] = is_error
+                return
     for item in reversed(run.tool_history):
         if item["name"] == tool_name and item["result"] is None:
             item["result"] = observation
@@ -330,6 +440,8 @@ def usage_payload(run: RunState) -> dict[str, Any]:
         "model_calls": len(run.model_call_usage),
         "model_call_usage": run.model_call_usage,
         "tool_calls": run.tool_call_count,
+        "compact_at_tokens": run.compact_at_tokens,
+        "compactions": run.compactions,
     }
 
 

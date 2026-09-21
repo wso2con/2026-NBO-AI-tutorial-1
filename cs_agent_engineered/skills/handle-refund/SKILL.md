@@ -25,8 +25,9 @@ The refund workflow. `issue_refund` takes `refund_percentage` (a fraction in (0,
 
    If `net_pct <= 0`, do NOT call `issue_refund` — escalate; nothing more is owed under policy.
 8. **Re-check against the cap** with the concrete amount — if `net_pct * total_usd` exceeds the cap you read in step 1, escalate the FULL amount as a single ticket. Do NOT split.
-9. **Execute** — `issue_refund(order_id, refund_percentage=net_pct, reason_code=<code>, reason="<specific>")`. `reason_code` names the entitlement you are claiming (`damaged`, `cancellation`, `shipping_delay_credit`, `return`) and the server checks it against the order's stored facts, so pick the one the evidence actually supports. On a `policy_violation` 403, escalate (the cap message is permanent). On a `policy_violation` 422, the evidence for that code is not on file — follow the `remediation`. There is no catch-all code, so if none of the four fits, escalate rather than claiming the nearest one.
-10. **Confirm in the reply** — dollar amount (the server returned it), category, reference number. State what was deducted for prior refunds and why if relevant.
+9. **Execute** — call `issue_refund(order_id, refund_percentage=net_pct, reason_code=<code>, reason="<specific>")`. `reason_code` names the entitlement you are claiming (`damaged`, `cancellation`, `shipping_delay_credit`, `return`) and the server checks it against the order's stored facts, so pick the one the evidence actually supports. On a `policy_violation` 403, escalate (the cap message is permanent). On a `policy_violation` 422, the evidence for that code is not on file — follow the `remediation`. There is no catch-all code, so if none of the four fits, escalate rather than claiming the nearest one.
+10. **Handle service failure** — on `service_timeout` with `retryable: false`, do not retry the refund. Escalate it for manual handling and tell the customer the refund was not completed.
+11. **Confirm in the reply** — dollar amount (the server returned it), category, reference number. State what was deducted for prior refunds and why if relevant.
 
 ## Anti-patterns
 

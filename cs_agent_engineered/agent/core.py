@@ -17,8 +17,8 @@ from pathlib import Path
 
 from mcp import StdioServerParameters, stdio_client
 from strands import Agent, AgentSkills
-from strands.agent.conversation_manager import SlidingWindowConversationManager
 from strands.models.openai import OpenAIModel
+from context_compaction import build_context_manager
 from context_trace import ContextTraceHook
 from demo_clock import today_iso
 from run_control import TokenBudgetHook
@@ -211,14 +211,16 @@ def build_agent(
         skills_plugin = AgentSkills(skills=[str(skills_dir)])
         plugins.append(skills_plugin)
 
-    # --- Session memory: `agent.messages` on the returned Agent, capped by
-    # Strands' SlidingWindowConversationManager. main.py caches one Agent
-    # per customer_id, so messages survive between requests (until window
-    # overflow or /api/reset / process restart). Window size comes from
-    # agent-profile.yaml's `memory.session.window`.
-    conversation_manager = SlidingWindowConversationManager(
-        window_size=profile.memory.session.window,
-    )
+    # --- Session memory: `agent.messages` on the returned Agent. main.py caches
+    # one Agent per customer_id, so messages survive between requests (until
+    # /api/reset or process restart).
+    #
+    # How that history is kept in bounds is a pipeline, not a single rule — see
+    # context_compaction.py. With the console's auto-compact dial off, the
+    # profile's `memory.session.window` still applies as a message cap; with it
+    # on, the oldest stretch is summarized instead, at the token line the
+    # presenter set. Nothing in either path truncates a tool observation.
+    context_manager = build_context_manager(profile.memory.session.window)
 
     # --- User identity binding: the harness, not the LLM, is the principal.
     # Every customer-scoped tool call has its `customer_id` arg overwritten
@@ -256,7 +258,7 @@ def build_agent(
         tools=[*mcp_clients, *local_tools],
         plugins=plugins,
         hooks=hooks_,
-        conversation_manager=conversation_manager,
+        context_manager=context_manager,
         # Suppress Strands' default PrintingCallbackHandler — it streams text
         # chunks straight to stdout (no newlines), which would interleave with
         # this service's logs. main.py collects tokens from stream_async events

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { BookOpen, Hourglass, RotateCcw, Sparkles } from "lucide-react";
+import { BookOpen, Hourglass, RotateCcw, Sparkles, WifiOff } from "lucide-react";
 import {
   AGENTS,
   DEFAULT_MODEL,
@@ -31,6 +31,7 @@ import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { ScenariosPanel } from "@/components/ScenariosPanel";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
 import type { DemoScenario, ScenarioPrompt } from "@/lib/scenarios";
 import {
   Select,
@@ -52,6 +53,32 @@ const CUSTOMERS = [
 const DEFAULT_TOKEN_BUDGET = 40000;
 const TOKEN_BUDGET_OPTIONS = [4000, 8000, 16000, 40000, 80000, 160000];
 
+// engineered only. The line at which the harness summarizes the oldest
+// messages instead of letting the next call's context keep growing, measured
+// in the same projected input tokens the context bars are drawn in. 0 is off.
+// The options start above the agent's own fixed surface (system prompt + tool
+// contracts, a few thousand tokens): a line below that can never be met, so
+// offering one would only compact on every call and save nothing.
+const DEFAULT_COMPACT_AT = 0;
+const COMPACT_AT_OPTIONS = [0, 8000, 12000, 20000, 40000];
+
+function resultIsError(result: unknown): boolean {
+  if (result && typeof result === "object" && !Array.isArray(result)) {
+    return "error" in result;
+  }
+  if (typeof result !== "string") return false;
+  const lowered = result.toLowerCase();
+  if (lowered.includes("error executing tool") || lowered.includes("service_timeout")) {
+    return true;
+  }
+  try {
+    const parsed = JSON.parse(result) as unknown;
+    return Boolean(parsed && typeof parsed === "object" && !Array.isArray(parsed) && "error" in parsed);
+  } catch {
+    return false;
+  }
+}
+
 function newRunId() {
   return typeof crypto !== "undefined" && "randomUUID" in crypto
     ? crypto.randomUUID()
@@ -62,12 +89,14 @@ export default function App() {
   const [customerId, setCustomerId] = useState<string>("cust_001");
   const [selectedModel, setSelectedModel] = useState<SupportedModel>(DEFAULT_MODEL);
   const [tokenBudget, setTokenBudget] = useState(DEFAULT_TOKEN_BUDGET);
+  const [compactAt, setCompactAt] = useState(DEFAULT_COMPACT_AT);
   // Composer text lives in App so the Scenarios panel can pre-fill it on click.
   const [composerText, setComposerText] = useState("");
   const [scenariosOpen, setScenariosOpen] = useState(false);
   const [selectedScenarioId, setSelectedScenarioId] = useState<string | null>(null);
   const [scenarioRunId, setScenarioRunId] = useState<string | null>(null);
   const [chatRunId, setChatRunId] = useState(newRunId);
+  const [refundServiceTimeout, setRefundServiceTimeout] = useState(false);
   const [firstCut, setFirstCut] = useState<AgentState>(emptyAgentState);
   const [engineered, setEngineered] = useState<AgentState>(emptyAgentState);
   // engineered-only feature toggles. `skills` / `episodic` default OFF so the engineered
@@ -259,7 +288,10 @@ export default function App() {
                     ...r,
                     result: ev.result,
                     result_summary: ev.result_summary,
-                    is_error: ev.is_error,
+                    // MCP can successfully transport a domain-level failure.
+                    // Treat structured {error: ...} results as failed tool
+                    // calls even when the protocol-level status is success.
+                    is_error: ev.is_error || resultIsError(ev.result),
                   }
                 : r,
             ),
@@ -300,6 +332,7 @@ export default function App() {
         case "llm_decision":
         case "action_selection":
         case "human_approval":
+        case "context_compacted":
         case "state_transition":
         case "loop_decision":
         case "recovery":
@@ -473,6 +506,7 @@ export default function App() {
               skills_enabled: engineeredSkillsEnabled,
               episodic_enabled: engineeredEpisodicEnabled,
               planner_enabled: engineeredPlannerEnabled,
+              compact_at: compactAt,
             }
           : { planner_enabled: firstCutPlannerEnabled }),
         signal: controller.signal,
@@ -515,11 +549,13 @@ export default function App() {
           model: selectedModel,
           run_id: comparisonRunId,
           token_budget: tokenBudget,
+          refund_service_timeout: refundServiceTimeout,
           ...(variant === "engineered"
             ? {
                 skills_enabled: engineeredSkillsEnabled,
                 episodic_enabled: engineeredEpisodicEnabled,
                 planner_enabled: engineeredPlannerEnabled,
+                compact_at: compactAt,
               }
             : {
                 planner_enabled: firstCutPlannerEnabled,
@@ -546,6 +582,9 @@ export default function App() {
     const launches: Promise<void>[] = [];
     if (engineeredTurn) launches.push(launch(AGENTS.engineered, "engineered", engineeredTurn.id));
     if (firstCutTurn) launches.push(launch(AGENTS.first_cut, "first_cut", firstCutTurn.id));
+    // The UI switch arms one comparison run. Each backend keeps its own
+    // one-shot fault armed until a qualifying refund consumes it.
+    if (refundServiceTimeout) setRefundServiceTimeout(false);
     await Promise.allSettled(launches);
   }
 
@@ -556,7 +595,9 @@ export default function App() {
     setEngineered((s) => ({ ...s, turns: [] }));
     setChatRunId(newRunId());
     setScenarioRunId(null);
+    setRefundServiceTimeout(false);
     setTokenBudget(DEFAULT_TOKEN_BUDGET);
+    setCompactAt(DEFAULT_COMPACT_AT);
     setResetMsg("resetting…");
     try {
       await Promise.all([resetAgent(AGENTS.first_cut), resetAgent(AGENTS.engineered)]);
@@ -604,8 +645,10 @@ export default function App() {
   async function nextSession() {
     if (anyRunning) return;
     setTokenBudget(DEFAULT_TOKEN_BUDGET);
+    setCompactAt(DEFAULT_COMPACT_AT);
     setChatRunId(newRunId());
     setScenarioRunId(null);
+    setRefundServiceTimeout(false);
     // Mark a divider after the last turn in each enabled panel.
     setFirstCut((s) => {
       if (s.turns.length === 0) return s;
@@ -653,6 +696,7 @@ export default function App() {
     }
     setSelectedScenarioId(scenario.id);
     if (scenario.model) setSelectedModel(scenario.model);
+    setRefundServiceTimeout(scenario.fault === "refund_service_timeout");
   }
 
   return (
@@ -734,6 +778,46 @@ export default function App() {
               </SelectContent>
             </Select>
           </Field>
+
+          <Field label="auto-compact at" htmlFor="compact-at">
+            <Select
+              value={String(compactAt)}
+              onValueChange={(value) => setCompactAt(Number(value))}
+              disabled={anyRunning}
+            >
+              <SelectTrigger id="compact-at" className="w-[120px]">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {COMPACT_AT_OPTIONS.map((value) => (
+                  <SelectItem key={value} value={String(value)}>
+                    {value === 0 ? "off" : `${value / 1000}k context`}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </Field>
+
+          <button
+            type="button"
+            disabled={anyRunning}
+            onClick={() => setRefundServiceTimeout((enabled) => !enabled)}
+            aria-pressed={refundServiceTimeout}
+            title="One-shot fault: the next refund service call times out before commit"
+            className={cn(
+              "inline-flex h-9 items-center gap-1.5 rounded-md border px-2.5 text-xs transition-colors",
+              "disabled:cursor-not-allowed disabled:opacity-50",
+              refundServiceTimeout
+                ? "border-amber-500/50 bg-amber-500/15 text-amber-700 dark:text-amber-400"
+                : "border-input bg-background text-muted-foreground hover:bg-accent",
+            )}
+          >
+            <WifiOff className="h-3.5 w-3.5" />
+            timeout next refund
+            <span className="text-[10px] uppercase tracking-wider opacity-70">
+              {refundServiceTimeout ? "armed" : "off"}
+            </span>
+          </button>
 
           <Button
             variant={scenariosOpen ? "secondary" : "outline"}

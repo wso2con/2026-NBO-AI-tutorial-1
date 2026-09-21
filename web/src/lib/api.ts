@@ -61,6 +61,12 @@ export interface RunArgs {
   run_id?: string;
   /** One grant's size, in total agent-loop tokens (input + output). */
   token_budget?: number;
+  /** engineered only — auto-compaction line, in projected input tokens for the
+   *  next model call. Omitted or 0 leaves context to grow. Live like
+   *  `token_budget`: it applies to the next model call, with no reset. */
+  compact_at?: number;
+  /** One-shot demo fault: next refund service call times out pre-commit. */
+  refund_service_timeout?: boolean;
   /** Answers a `budget_grant_required` pause: resume `run_id` with one more
    *  grant (true) rather than starting a new task. */
   budget_grant?: boolean;
@@ -108,6 +114,10 @@ export async function runAgent(svc: AgentService, args: RunArgs): Promise<void> 
         : {}),
       ...(args.run_id ? { run_id: args.run_id } : {}),
       ...(args.token_budget !== undefined ? { token_budget: args.token_budget } : {}),
+      ...(args.compact_at !== undefined ? { compact_at: args.compact_at } : {}),
+      ...(args.refund_service_timeout !== undefined
+        ? { refund_service_timeout: args.refund_service_timeout }
+        : {}),
       ...(args.budget_grant !== undefined ? { budget_grant: args.budget_grant } : {}),
       ...(args.confirm !== undefined ? { confirm: args.confirm } : {}),
       ...(args.confirm_decisions ? { confirm_decisions: args.confirm_decisions } : {}),

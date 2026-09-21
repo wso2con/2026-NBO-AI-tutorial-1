@@ -50,6 +50,7 @@ from policy_evaluator import (
     aggregate_verdict,
     evaluate_turn,
 )
+from mocks.client import arm_fault
 from loop_state import (
     RunStore,
     add_auxiliary,
@@ -131,6 +132,8 @@ def _summarize_args(name: str, args: dict | None) -> str:
 
 
 _STR_ERROR_SENTINELS = (
+    "error executing tool",
+    "timed out",
     "not found",
     "couldn't",
     "couldnt",
@@ -366,6 +369,8 @@ class RunRequest(BaseModel):
     planner_enabled: bool | None = None
     run_id: str | None = None
     token_budget: int | None = None
+    # One-shot demo fault: the next refund service call times out pre-commit.
+    refund_service_timeout: bool = False
 
 
 app = FastAPI(title="cs_agent_first_cut", version="0.1.0")
@@ -406,6 +411,8 @@ async def run(req: RunRequest):
     # without rebuilding (which would wipe the message list). The shared
     # instance is what makes memory leak across customers — the lab's point.
     agent = _get_first_cut_agent()
+    if req.refund_service_timeout:
+        arm_fault(AGENT_ID, "refund_service_timeout")
     run_state = _RUNS.start(
         run_id=req.run_id,
         customer_id=req.customer_id,
@@ -488,7 +495,16 @@ async def run(req: RunRequest):
                         tool_name=body.get("name", "tool"),
                         observation=body.get("result"),
                         is_error=bool(body.get("is_error")),
+                        tool_use_id=body.get("tool_use_id") or None,
                     )
+                    if "timed out" in json.dumps(body.get("result"), default=str).lower():
+                        yield loop_event(
+                            "recovery",
+                            run_state,
+                            "Refund service timed out before completing the write",
+                            fault="refund_service_timeout",
+                            decision="model_must_choose_recovery",
+                        )
                     yield loop_event(
                         "state_transition",
                         run_state,

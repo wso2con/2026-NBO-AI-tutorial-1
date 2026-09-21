@@ -35,7 +35,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
-from strands.hooks import HookRegistry
+from strands.hooks import HookOrder, HookRegistry
 from strands.hooks.events import (
     AfterModelCallEvent,
     BeforeModelCallEvent,
@@ -88,7 +88,13 @@ class TokenBudgetHook:
     mode: Literal["hard", "graceful"]
 
     def register_hooks(self, registry: HookRegistry, **_: object) -> None:
-        registry.add_callback(BeforeModelCallEvent, self._before_model)
+        # After the default order, so the engineered loop's context pipeline
+        # (a plugin, and therefore registered after this hook) has already
+        # compacted when it was going to. Metering a context that compaction
+        # was about to shrink would stop a turn that had room to continue.
+        registry.add_callback(
+            BeforeModelCallEvent, self._before_model, order=HookOrder.DEFAULT + 10
+        )
         registry.add_callback(AfterModelCallEvent, self._after_model)
         registry.add_callback(BeforeToolCallEvent, self._before_tool)
 
@@ -100,10 +106,17 @@ class TokenBudgetHook:
             return
         # The next call's input is known before dispatch and is the best
         # available projection of whether another iteration fits.
+        run.model_call_count += 1
         projected_input = int(event.projected_input_tokens or 0)
+        # Strands computes that projection before any hook runs and anchors it
+        # on the last assistant message's provider usage, so a compaction that
+        # just happened is invisible in it. When the context pipeline acted for
+        # this very call, its own post-compaction count is the honest number.
+        compaction = run.compactions[-1] if run.compactions else None
+        if compaction and compaction.get("call") == run.model_call_count:
+            projected_input = int(compaction.get("after_tokens") or projected_input)
         run.projected_next_call_tokens = projected_input
         run.peak_call_input_tokens = max(run.peak_call_input_tokens, projected_input)
-        run.model_call_count += 1
 
         spent = loop_tokens_used(run)
         projected_total = spent + projected_input
@@ -196,5 +209,8 @@ class TokenBudgetHook:
             return
         tool_use = event.tool_use
         record_tool_call(
-            run, str(tool_use.get("name", "tool")), tool_use.get("input") or {}
+            run,
+            str(tool_use.get("name", "tool")),
+            tool_use.get("input") or {},
+            tool_use_id=str(tool_use.get("toolUseId") or tool_use.get("id") or "") or None,
         )

@@ -46,6 +46,7 @@ DATA_ROOT = Path(__file__).parent / "data"
 CUSTOMERS_FILE = "customers.json"
 ORDERS_FILE = "orders.json"
 LEDGER_FILE = "ledger.json"
+FAULTS_FILE = "faults.json"
 
 
 def _load_seed(name: str):
@@ -114,6 +115,30 @@ def reset_data_files(agent_id: str) -> None:
     # the seed state, which is what a reset means anyway.
     for name in (CUSTOMERS_FILE, ORDERS_FILE, LEDGER_FILE):
         _write_json(data_dir / name, _load_seed(name))
+    _write_json(data_dir / FAULTS_FILE, {})
+
+
+def arm_fault(agent_id: str, fault: str) -> None:
+    """Arm a one-shot backend fault for the named agent."""
+    data_dir = _agent_data_dir(agent_id)
+    _seed_if_missing(data_dir)
+    path = data_dir / FAULTS_FILE
+    state = json.loads(path.read_text()) if path.exists() else {}
+    state[fault] = True
+    _write_json(path, state)
+
+
+def consume_fault(agent_id: str, fault: str) -> bool:
+    """Consume a one-shot fault, returning whether it had been armed."""
+    path = _agent_data_dir(agent_id) / FAULTS_FILE
+    if not path.exists():
+        return False
+    state = json.loads(path.read_text())
+    if not state.get(fault):
+        return False
+    state[fault] = False
+    _write_json(path, state)
+    return True
 
 
 class CustomerSupportClient:

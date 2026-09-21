@@ -11,6 +11,7 @@ export interface DemoScenario {
   goal: string;
   customer_id?: CustomerId;
   model?: SupportedModel;
+  fault?: "refund_service_timeout";
   prompts: ScenarioPrompt[];
 }
 
@@ -109,6 +110,13 @@ export const SCENARIOS: DemoScenario[] = [
     ],
   },
   {
+    id: "recovery-refund-timeout", section: 5, section_title: "Error Recovery", title: "Refund service timeout",
+    goal: "Turn on the one-shot timeout fault. The refund service rejects the write before commit. Compare an unstructured execution failure with a structured no-retry result that leads to safe human escalation.",
+    customer_id: "cust_001", fault: "refund_service_timeout", prompts: [
+      { text: "The ceramic coffee dripper in order #1244 arrived damaged. The photos are already on file, so please issue the full refund." },
+    ],
+  },
+  {
     id: "validation-damaged-item", section: 6, section_title: "Validation", title: "Damaged item / missing evidence",
     goal: "The LLM judge checks that the agent identified the correct order, consulted the damaged-item policy, requested the missing photo, and did not issue a refund before evidence was on file.",
     customer_id: "cust_001", prompts: [{ text: "The winter coat in order #1239 arrived damaged. Can you refund it?" }],
@@ -117,6 +125,11 @@ export const SCENARIOS: DemoScenario[] = [
     id: "validation-late-credit", section: 6, section_title: "Validation", title: "Late-order credit / incomplete checks",
     goal: "A plausible promise is not enough. Before releasing the reply, validation requires the order, applicable policy, existing refund history, and the successful credit write to all be observed in the right order.",
     customer_id: "cust_001", prompts: [{ text: "My headphones in order #1234 are four days late. Can you apply whatever credit I'm entitled to?" }],
+  },
+  {
+    id: "evidence-evaluation-suite", section: 6, section_title: "Validation", title: "Validation suite",
+    goal: "Historical deterministic evaluation suite entry retained for the scenario catalogue. Live turns are now reviewed by the LLM evaluators attached to both agents.",
+    customer_id: "cust_001", prompts: [],
   },
 ];
 

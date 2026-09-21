@@ -28,7 +28,7 @@ if str(_LAB_ROOT) not in sys.path:
 from strands import tool
 
 from config import AGENT_ID, REFUND_CAP_USD
-from mocks.client import CustomerSupportClient
+from mocks.client import CustomerSupportClient, consume_fault
 
 # first-cut has no scoped identity — no AgentIdentity dataclass, no per-call
 # principal, no harness-enforced cap. The agent_id is a string the
@@ -122,6 +122,10 @@ def modify_order(
         # prior refunds. Agent typically passes the category percentage from
         # memory and over-refunds when a shipping-delay credit already exists.
         amt = float(refund_percentage) * float(o.total_usd)
+        if consume_fault(AGENT_ID, "refund_service_timeout"):
+            # The legacy in-process tool leaks a raw exception. Strands turns
+            # it into an unstructured tool-execution error for the model.
+            raise TimeoutError("refund service timed out before the write completed")
         ref = _client.issue_refund(
             order_id,
             o.customer_id,

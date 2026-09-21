@@ -16,6 +16,7 @@ each service's own summarizers, which don't survive in the message log.
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 
@@ -48,6 +49,23 @@ def _result_body(tool_result: dict[str, Any]) -> Any:
     return parts[0] if len(parts) == 1 else parts
 
 
+def _is_error_result(body: Any, protocol_status: Any) -> bool:
+    if protocol_status == "error":
+        return True
+    if isinstance(body, dict) and "error" in body:
+        return True
+    if isinstance(body, str):
+        lowered = body.lower()
+        if "error executing tool" in lowered or "service_timeout" in lowered:
+            return True
+        try:
+            parsed = json.loads(body)
+        except (TypeError, ValueError):
+            return False
+        return isinstance(parsed, dict) and "error" in parsed
+    return False
+
+
 def turns_from_messages(messages: list[Any] | None) -> list[dict[str, Any]]:
     """Group a converse message log into [{user_prompt, trace, final_reply}]."""
     turns: list[dict[str, Any]] = []
@@ -76,7 +94,7 @@ def turns_from_messages(messages: list[Any] | None) -> list[dict[str, Any]]:
                     continue
                 body = _result_body(result)
                 row["result"] = body
-                row["is_error"] = result.get("status") == "error"
+                row["is_error"] = _is_error_result(body, result.get("status"))
                 row["result_summary"] = _truncate(body)
 
         elif role == "assistant" and current is not None:
