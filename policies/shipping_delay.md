@@ -1,7 +1,7 @@
 ---
 id: shipping_delay
-title: Compensation for late or delayed deliveries
-keywords: [delay, delayed, late, shipping, tracking, where is my order]
+title: Shipping delay
+keywords: [delay, delayed, late, shipping, cancellation, refund, tracking, where is my order]
 ---
 
 # Compensation for late or delayed deliveries

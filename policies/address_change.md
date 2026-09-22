@@ -1,6 +1,6 @@
 ---
 id: address_change
-title: Changing the shipping address on an order
+title: Address change
 keywords: [address, shipping address, wrong address, change address, redirect, my office]
 ---
 

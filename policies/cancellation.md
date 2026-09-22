@@ -1,6 +1,6 @@
 ---
 id: cancellation
-title: Cancelling an order before it ships
+title: Cancellation
 keywords: [cancel, cancellation, cancel my order, call it off, stop the order, don't want it anymore, taking too long, scrap the order]
 ---
 

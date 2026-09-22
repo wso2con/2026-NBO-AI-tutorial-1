@@ -1,6 +1,6 @@
 ---
 id: refund_damaged_item
-title: Refunds and replacements for items that arrive damaged
+title: Damaged items
 keywords: [damaged, broken, cracked, smashed, dented, leaking, defective, arrived broken]
 ---
 

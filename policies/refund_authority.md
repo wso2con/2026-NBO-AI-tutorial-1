@@ -1,6 +1,6 @@
 ---
 id: refund_authority
-title: Refund authority limits and when to escalate for approval
+title: Refund authority
 keywords: [refund, refund limit, high value, approval, escalate, cap]
 ---
 

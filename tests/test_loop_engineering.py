@@ -1,9 +1,14 @@
 import asyncio
 import json
 from pathlib import Path
+import sys
 from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock, patch
+
+ENGINEERED_ROOT = Path(__file__).resolve().parents[1] / "cs_agent_engineered"
+if str(ENGINEERED_ROOT) not in sys.path:
+    sys.path.insert(0, str(ENGINEERED_ROOT))
 
 from context_compaction import CompactAt, MessageWindow, projected_input_tokens
 from loop_state import (
@@ -35,9 +40,64 @@ from cs_agent_engineered.agent.hooks import (
     confirmation_question,
     is_affirmative,
 )
+from cs_agent_engineered.agent.profile import apply_overrides, load_profile
+from agent.core import _memory_protocol, prepend_memory
+from agent import memory as episodic_memory
 
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+class ProfileConfigTests(unittest.TestCase):
+    def test_hitl_is_off_by_default_and_can_be_enabled_for_a_rebuild(self) -> None:
+        profile = load_profile()
+        self.assertFalse(profile.hitl_enabled)
+
+        enabled = apply_overrides(profile, hitl_enabled=True)
+        self.assertTrue(enabled.hitl_enabled)
+        self.assertFalse(profile.hitl_enabled)
+
+
+class EpisodicMemoryPromptTests(unittest.TestCase):
+    @patch("agent.core.memory.load")
+    def test_compaction_control_is_outside_untrusted_memory(self, load_memory) -> None:
+        load_memory.return_value = "A durable note that is long enough."
+
+        framed = prepend_memory("cust_001", "Current customer request", compact_threshold=10)
+        memory_block, remainder = framed.split("</episodic_memory>", maxsplit=1)
+
+        self.assertNotIn("compact_memory", memory_block)
+        self.assertIn('<memory_control action="compact"', remainder)
+        self.assertIn("Do not call append_memory", remainder)
+        self.assertTrue(framed.endswith("Current customer request"))
+
+    @patch("agent.core.memory.load")
+    def test_small_memory_has_no_compaction_control(self, load_memory) -> None:
+        load_memory.return_value = "Short durable note."
+
+        framed = prepend_memory("cust_001", "Current customer request", compact_threshold=4_000)
+
+        self.assertIn("<episodic_memory", framed)
+        self.assertNotIn("<memory_control", framed)
+
+    def test_memory_tool_arguments_have_model_facing_descriptions(self) -> None:
+        append_properties = episodic_memory.append_memory.tool_spec["inputSchema"]["json"][
+            "properties"
+        ]
+        compact_properties = episodic_memory.compact_memory.tool_spec["inputSchema"]["json"][
+            "properties"
+        ]
+
+        self.assertIn('Always pass ""', append_properties["customer_id"]["description"])
+        self.assertIn("deadline", append_properties["note"]["description"])
+        self.assertIn("complete replacement", compact_properties["new_content"]["description"])
+
+    def test_memory_protocol_allows_temporary_cross_session_deadlines(self) -> None:
+        protocol = " ".join(_memory_protocol().split())
+
+        self.assertIn("It may be temporary", protocol)
+        self.assertIn("time-sensitive customer need", protocol)
+        self.assertIn("trip deadline", protocol)
 
 
 class LoopStateTests(unittest.TestCase):
@@ -103,7 +163,26 @@ class LoopStateTests(unittest.TestCase):
                     model="test-model",
                     customer_request="Where is my order?",
                     proposed_reply="It is in transit.",
-                    tool_history=[{"name": "get_order", "is_error": False}],
+                    tool_history=[
+                        {
+                            "name": "get_order",
+                            "args": {"order_id": "1234"},
+                            "result": {"status": "in_transit"},
+                            "is_error": False,
+                        }
+                    ],
+                    tool_specs=[
+                        {
+                            "name": "get_order",
+                            "description": "Return the requested order.",
+                            "inputSchema": {
+                                "json": {
+                                    "properties": {"order_id": {"type": "string"}},
+                                    "required": ["order_id"],
+                                }
+                            },
+                        }
+                    ],
                     declared_contract={"required_criteria": ["order_observed"]},
                     refund_cap_usd=200.0,
                 ):
@@ -119,6 +198,11 @@ class LoopStateTests(unittest.TestCase):
         self.assertEqual(
             sum(usage.input_tokens for _, usage in results), 400 * len(EVALUATION_ASPECTS)
         )
+        requests = client.chat.completions.create.await_args_list
+        evidence_prompts = [call.kwargs["messages"][1]["content"] for call in requests]
+        self.assertTrue(any('"order_id": "1234"' in prompt for prompt in evidence_prompts))
+        self.assertTrue(any("<tool_contracts>" in prompt for prompt in evidence_prompts))
+        self.assertTrue(any("Return the requested order" in prompt for prompt in evidence_prompts))
 
     def test_evaluate_turn_isolates_a_failing_reviewer(self) -> None:
         """One unreachable review must not take the other aspects down."""
@@ -152,6 +236,7 @@ class LoopStateTests(unittest.TestCase):
                     customer_request="q",
                     proposed_reply="a",
                     tool_history=[],
+                    tool_specs=[],
                     declared_contract=None,
                     refund_cap_usd=200.0,
                 ):
@@ -668,7 +753,10 @@ class RefundEntitlementTests(unittest.TestCase):
         self.assertTrue(result.get("ok"), result)
         self.assertEqual(result.get("reason_code"), "damaged")
 
-    def test_refund_timeout_is_structured_and_does_not_commit(self) -> None:
+    def test_refund_timeout_is_structured_and_reports_an_unknown_outcome(self) -> None:
+        """The fault commits the write and loses the acknowledgement, so the
+        result must not claim the refund did not happen: a blind retry on top
+        of a committed write is the double refund this case exists to teach."""
         server = self._server()
         arm_fault(server._identity.agent_id, "refund_service_timeout")
         result = server.issue_refund("cust_001", "1244", 1.0, "damaged", "test")
@@ -679,10 +767,11 @@ class RefundEntitlementTests(unittest.TestCase):
             and entry.get("kind") == "refund"
         ]
         self.assertEqual(result.get("error"), "service_timeout")
-        self.assertEqual(result.get("outcome"), "not_committed")
+        self.assertEqual(result.get("outcome"), "unknown")
         self.assertFalse(result.get("retryable"))
-        self.assertEqual(result.get("remediation"), "escalate_to_human")
-        self.assertEqual(len(writes), 0)
+        self.assertEqual(result.get("remediation"), "verify_then_escalate")
+        self.assertNotIn("ref", result)
+        self.assertEqual(len(writes), 1)
 
     def test_no_reason_code_launders_a_blocked_damage_claim(self) -> None:
         """The property the whole design rests on: an agent blocked on

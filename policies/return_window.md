@@ -1,7 +1,7 @@
 ---
 id: return_window
-title: Returning an unwanted item within the return window
-keywords: [return, return window, send back, 30 days, unwanted, changed mind]
+title: Returning Window
+keywords: [return, refund, cancellation, return damaged, return window, send back, 30 days, unwanted, changed mind]
 ---
 
 # Returning an unwanted item within the return window

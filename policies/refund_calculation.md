@@ -1,6 +1,6 @@
 ---
 id: refund_calculation
-title: How to calculate the refund percentage to issue
+title: Calculate
 keywords: [refund calculation, how to compute refund, refund percentage, cancellation refund, net refund, prior refund, partial refund, refund amount, what percentage to refund]
 ---
 
