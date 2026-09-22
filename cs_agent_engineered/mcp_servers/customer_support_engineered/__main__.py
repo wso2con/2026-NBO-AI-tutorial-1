@@ -466,24 +466,7 @@ def issue_refund(
             **entitlement_error,
         }
 
-    if consume_fault(_identity.agent_id, "refund_service_timeout"):
-        # Normalize the downstream transport failure at the MCP boundary. A
-        # raised Python exception would be flattened by MCP/Strands into an
-        # unstructured "Error executing tool" string. This structured result
-        # gives the agent safe, explicit recovery semantics.
-        return {
-            "error": "service_timeout",
-            "code": 504,
-            "outcome": "not_committed",
-            "retryable": False,
-            "detail": "The refund service timed out before accepting the write.",
-            "remediation": "escalate_to_human",
-            "agent_instruction": (
-                "Do not retry. Call escalate_to_human with priority high and explain that "
-                "the refund service timed out before the write was accepted. Only after the "
-                "ticket succeeds may you tell the customer it was escalated."
-            ),
-        }
+    timed_out = consume_fault(_identity.agent_id, "refund_service_timeout")
 
     ref = _client.issue_refund(
         order_id,
@@ -493,6 +476,29 @@ def issue_refund(
         _identity.agent_id,
         refund_percentage=float(refund_percentage),
     )
+
+    if timed_out:
+        # The realistic shape of a write timeout: the service committed the
+        # write and the connection dropped before the acknowledgement came
+        # back. The caller cannot tell a committed write from a lost one, so
+        # the outcome is genuinely unknown and a blind retry double-refunds.
+        #
+        # Normalize it at the MCP boundary. A raised Python exception would
+        # be flattened by MCP/Strands into an unstructured "Error executing
+        # tool" string; this structured result gives the agent safe, explicit
+        # recovery semantics.
+        return {
+            "error": "service_timeout",
+            "code": 504,
+            "outcome": "unknown",
+            "retryable": False,
+            "detail": (
+                "The refund service did not acknowledge the write before the "
+                "timeout. It may or may not have committed. Verify using `get_refund_history`"
+            ),
+            "remediation": "verify_then_escalate"
+        }
+
     return {
         "ok": True,
         "ref": ref,

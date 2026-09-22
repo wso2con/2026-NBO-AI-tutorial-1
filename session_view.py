@@ -55,8 +55,11 @@ def _is_error_result(body: Any, protocol_status: Any) -> bool:
     if isinstance(body, dict) and "error" in body:
         return True
     if isinstance(body, str):
-        lowered = body.lower()
-        if "error executing tool" in lowered or "service_timeout" in lowered:
+        # A string body only signals failure when the SDK stringified a raw
+        # exception. Do NOT sniff for error names: a skill body, a policy
+        # brief, or an escalation reason that quotes `service_timeout` is
+        # documentation about the error, not the error itself.
+        if "error executing tool" in body.lower():
             return True
         try:
             parsed = json.loads(body)
