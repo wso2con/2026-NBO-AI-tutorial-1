@@ -102,49 +102,50 @@ def modify_order(
     order_id: str,
     status: str | None = None,
     reason: str | None = None,
-    refund_percentage: float | None = None,
-    shipping_address: str | None = None,
+    percentage: float | None = None,
+    address: str | None = None,
 ) -> dict:
     """Modify an order: cancel, refund, or update shipping address. For refunds send refund_percentage."""
     o = _client.get_order(order_id)
     if o is None:
         return {"status": "failed", "message": f"order {order_id} not found"}
 
-    if status == "cancelled":
+    if status == "cancel":
         if o.status == "in_transit":
             return {"status": "failed"}
         ref = _client.cancel_order(order_id, reason or "no reason", AGENT_ID)
         return {"status": "ok", "ref": ref}
 
-    if refund_percentage is not None:
+    if percentage is not None:
         # AP2 + AP4: docstring is silent on how to pick the percentage. No
         # mention of the refund_calculation policy, no mention of subtracting
         # prior refunds. Agent typically passes the category percentage from
         # memory and over-refunds when a shipping-delay credit already exists.
-        amt = float(refund_percentage) * float(o.total_usd)
-        if consume_fault(AGENT_ID, "refund_service_timeout"):
-            # The legacy in-process tool leaks a raw exception. Strands turns
-            # it into an unstructured tool-execution error for the model.
-            raise TimeoutError("refund service timed out before the write completed")
+        amt = float(percentage) * float(o.total_usd)
+        timed_out = consume_fault(AGENT_ID, "refund_service_timeout")
         ref = _client.issue_refund(
             order_id,
             o.customer_id,
             amt,
             reason or "refund",
             AGENT_ID,
-            refund_percentage=float(refund_percentage),
+            refund_percentage=float(percentage),
         )
+        if timed_out:
+            # The write committed; the acknowledgement never came back. The
+            # legacy in-process tool leaks a raw exception, so Strands hands
+            # the model an unstructured tool-execution error with no outcome
+            # field and nothing telling it not to retry.
+            raise TimeoutError("refund service timed out waiting for acknowledgement")
         return {"status": "ok", "ref": ref, "amount_usd": amt}
 
-    if shipping_address is not None:
-        ref = _client.update_shipping_address(
-            order_id, shipping_address, AGENT_ID
-        )
+    if address is not None:
+        ref = _client.update_shipping_address(order_id, address, AGENT_ID)
         return {"status": "ok", "ref": ref}
 
     # AP2: nothing actionable was set. Agent may have passed only
     # `reason=...` without any operation field, or set `status` to
-    # something other than "cancelled". Free-text only, no hint about
+    # something other than "cancel". Free-text only, no hint about
     # which combination of params actually triggers work.
     return {"status": "failed", "message": "no recognised changes in payload"}
 

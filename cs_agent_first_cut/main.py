@@ -44,7 +44,6 @@ load_dotenv(Path(__file__).parent / ".env", override=False)
 
 from agent import AGENT_ID, build_agent, frame_prompt
 from config import MODEL_ID, REFUND_CAP_USD
-from planner import format_tool_specs, plan_for_prompt
 from policy_evaluator import (
     ASPECTS as EVALUATION_ASPECTS,
     aggregate_verdict,
@@ -296,6 +295,10 @@ async def _run_agent_stream(agent: Agent, prompt: str, *, run_state):
                     continue
                 body = _extract_tool_result_body(block)
                 summary, is_err = _summarize_result(slot["name"], body)
+                # The protocol carries its own failure flag. Honour it so an
+                # unstructured failure (a raw exception the SDK stringified)
+                # is flagged here rather than left to the UI to sniff for.
+                is_err = is_err or tr.get("status") == "error"
                 yield {
                     "event": "tool_result",
                     "data": json.dumps(
@@ -371,13 +374,16 @@ class RunRequest(BaseModel):
     #                 actually works. engineered's `CustomerIdBindingHook` is
     #                 the counterpart that makes the ID harness-owned instead.
     model: str | None = None  # Per-request override; falls back to MODEL_ID.
-    # Per-request planner toggle. first-cut has no skills loader, so the planner
-    # always runs with `skills_enabled=False`. Per-request, no rebuild
-    # needed — the planner is a separate LLM call, not part of agent build.
+    # Accepted and ignored. The planner is an engineered-loop control: the
+    # first-cut agent has no plan step, which is part of what the comparison
+    # shows. The console only sends this field to the engineered service.
     planner_enabled: bool | None = None
+    # Optional post-turn LLM reviews. Off unless the presenter enables them.
+    evaluation_enabled: bool = False
     run_id: str | None = None
     token_budget: int | None = None
-    # One-shot demo fault: the next refund service call times out pre-commit.
+    # One-shot demo fault: the next refund service call commits the write,
+    # then times out before acknowledging it.
     refund_service_timeout: bool = False
 
 
@@ -440,32 +446,6 @@ async def run(req: RunRequest):
     # one file to see how customer_id ends up in the LLM-visible message.
     framed_prompt = frame_prompt(req.customer_id, req.prompt)
 
-    # Planning layer: same module as engineered (../planner.py at the lab root),
-    # called the same way. first-cut has no skills loader, so we always pass
-    # `skills_enabled=False` — the planner is told skills aren't an
-    # option here and won't suggest any.
-    plan = ""
-    if req.planner_enabled:
-        try:
-            tools_catalogue = format_tool_specs(
-                agent.tool_registry.get_all_tool_specs()
-            )
-            plan, planner_usage = await plan_for_prompt(
-                req.prompt,
-                model=req.model or MODEL_ID,
-                tools_catalogue=tools_catalogue,
-                skills_enabled=False,
-            )
-            add_auxiliary(run_state, planner_usage)
-        except Exception:  # noqa: BLE001
-            # Planner failures (timeout, rate limit) shouldn't take the
-            # turn down — fall back to the unplanned prompt.
-            log.exception("planner call failed; proceeding without a plan")
-            plan = ""
-
-    if plan:
-        framed_prompt = f"{plan}\n\n{framed_prompt}"
-
     async def generator():
         proposed_reply = ""
         tools = agent.tool_registry.get_all_tool_specs()
@@ -475,7 +455,6 @@ async def run(req: RunRequest):
             system_prompt=agent.system_prompt or "",
             message_count=len(getattr(agent, "messages", []) or []),
             tool_names=_tool_names(tools),
-            plan=plan,
         )
         yield loop_event(
             "context_build",
@@ -489,8 +468,6 @@ async def run(req: RunRequest):
                 "run_state_in_model_context": False,
             },
         )
-        if plan:
-            yield {"event": "plan", "data": json.dumps({"content": plan})}
         try:
             async for ev in _run_agent_stream(agent, framed_prompt, run_state=run_state):
                 if ev.get("event") == "tool_call":
@@ -515,7 +492,7 @@ async def run(req: RunRequest):
                         yield loop_event(
                             "recovery",
                             run_state,
-                            "Refund service timed out before completing the write",
+                            "Refund service did not acknowledge the write; outcome unknown",
                             fault="refund_service_timeout",
                             decision="model_must_choose_recovery",
                         )
@@ -580,6 +557,10 @@ async def run(req: RunRequest):
                         state=run_state.dump(),
                     )
 
+            if not req.evaluation_enabled:
+                run_state.evaluation_status = "skipped"
+                return
+
             # The answer has already been released. Review the same evidence
             # bundle used for engineered so the comparison is symmetric.
             evaluation_results: list[dict[str, Any]] = []
@@ -598,6 +579,7 @@ async def run(req: RunRequest):
                     customer_request=req.prompt,
                     proposed_reply=proposed_reply,
                     tool_history=run_state.tool_history,
+                    tool_specs=tools,
                     declared_contract=None,
                     refund_cap_usd=REFUND_CAP_USD,
                 ):
