@@ -71,13 +71,20 @@ export function ScenariosPanel({ onApply, onClose, disabled }: Props) {
               {sectionLabel}
             </div>
             <div className="flex flex-col gap-2 px-3 py-2">
-              {scenarios.map((s) => (
-                <ScenarioCard
-                  key={s.id}
-                  scenario={s}
-                  disabled={disabled}
-                  onPrompt={(prompt, index) => onApply(s, prompt, index)}
-                />
+              {scenarios.map((s, index) => (
+                <div key={s.id} className="contents">
+                  {s.subsection &&
+                    (index === 0 || scenarios[index - 1].subsection !== s.subsection) && (
+                      <div className="mt-1 border-l-2 border-primary/40 pl-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground first:mt-0">
+                        {s.subsection}
+                      </div>
+                    )}
+                  <ScenarioCard
+                    scenario={s}
+                    disabled={disabled}
+                    onPrompt={(prompt, promptIndex) => onApply(s, prompt, promptIndex)}
+                  />
+                </div>
               ))}
             </div>
           </div>
@@ -106,6 +113,11 @@ function ScenarioCard({ scenario, disabled, onPrompt }: ScenarioCardProps) {
         {scenario.model && (
           <Badge variant="outline" className="font-mono text-[10px]">
             {scenario.model}
+          </Badge>
+        )}
+        {scenario.compact_at !== undefined && scenario.compact_at > 0 && (
+          <Badge variant="outline" className="font-mono text-[10px]">
+            compact {scenario.compact_at / 1000}k
           </Badge>
         )}
         {scenario.fault === "refund_service_timeout" && (

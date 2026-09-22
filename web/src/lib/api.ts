@@ -58,6 +58,8 @@ export interface RunArgs {
   // `planner_enabled` is per-request — no agent rebuild needed, so it can
   // flip mid-session unlike skills/episodic.
   planner_enabled?: boolean;
+  /** Run the post-turn LLM reviewers. Off by default for both agents. */
+  evaluation_enabled?: boolean;
   run_id?: string;
   /** One grant's size, in total agent-loop tokens (input + output). */
   token_budget?: number;
@@ -65,7 +67,10 @@ export interface RunArgs {
    *  next model call. Omitted or 0 leaves context to grow. Live like
    *  `token_budget`: it applies to the next model call, with no reset. */
   compact_at?: number;
-  /** One-shot demo fault: next refund service call times out pre-commit. */
+  /** engineered only — require human approval before protected write tools. */
+  hitl_enabled?: boolean;
+  /** One-shot demo fault: next refund service call commits, then times out
+   * before acknowledging the write. */
   refund_service_timeout?: boolean;
   /** Answers a `budget_grant_required` pause: resume `run_id` with one more
    *  grant (true) rather than starting a new task. */
@@ -115,9 +120,13 @@ export async function runAgent(svc: AgentService, args: RunArgs): Promise<void> 
       ...(args.planner_enabled !== undefined
         ? { planner_enabled: args.planner_enabled }
         : {}),
+      ...(args.evaluation_enabled !== undefined
+        ? { evaluation_enabled: args.evaluation_enabled }
+        : {}),
       ...(args.run_id ? { run_id: args.run_id } : {}),
       ...(args.token_budget !== undefined ? { token_budget: args.token_budget } : {}),
       ...(args.compact_at !== undefined ? { compact_at: args.compact_at } : {}),
+      ...(args.hitl_enabled !== undefined ? { hitl_enabled: args.hitl_enabled } : {}),
       ...(args.refund_service_timeout !== undefined
         ? { refund_service_timeout: args.refund_service_timeout }
         : {}),

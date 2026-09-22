@@ -1,4 +1,12 @@
-import { BookOpen, Brain, ListChecks, Loader2, MessageSquare, Power } from "lucide-react";
+import {
+  BookOpen,
+  Brain,
+  Loader2,
+  MessageSquare,
+  Minimize2,
+  Power,
+  ShieldCheck,
+} from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { cn } from "@/lib/utils";
@@ -30,12 +38,11 @@ interface Props {
   // engineered-only: feature toggles. Undefined for first-cut — the row doesn't render.
   skillsEnabled?: boolean;
   episodicEnabled?: boolean;
-  // `plannerEnabled` is per-request (no agent rebuild), so it can flip
-  // freely without the confirm-dialog dance the other two need.
-  plannerEnabled?: boolean;
+  hitlEnabled?: boolean;
+  compactAt?: number;
   onToggleSkills?: () => void;
   onToggleEpisodic?: () => void;
-  onTogglePlanner?: () => void;
+  onToggleHitl?: () => void;
   // Disables the feature toggles while a chat is in-flight (same as the
   // top-bar reset button).
   featuresDisabled?: boolean;
@@ -58,10 +65,11 @@ export function AgentPanel({
   pauseBusy,
   skillsEnabled,
   episodicEnabled,
-  plannerEnabled,
+  hitlEnabled,
+  compactAt,
   onToggleSkills,
   onToggleEpisodic,
-  onTogglePlanner,
+  onToggleHitl,
   featuresDisabled,
   customerId,
   memoryRefreshKey,
@@ -128,9 +136,8 @@ export function AgentPanel({
               {displayStatus}
             </Badge>
           )}
-          {/* engineered-only feature toggles. Flipping either restarts the engineered session
-              (agent rebuild — skills/episodic memory are baked at build time).
-              App.tsx confirms the destruction before calling the handler. */}
+          {/* Engineered-only build controls. Planner is kept in the global
+              Controls popover because each agent has its own live setting. */}
           {onToggleSkills && (
             <FeatureToggle
               label="skills"
@@ -149,12 +156,12 @@ export function AgentPanel({
               disabled={featuresDisabled}
             />
           )}
-          {onTogglePlanner && (
+          {onToggleHitl && (
             <FeatureToggle
-              label="planner"
-              icon={<ListChecks className="h-3 w-3" />}
-              enabled={!!plannerEnabled}
-              onClick={onTogglePlanner}
+              label="HITL"
+              icon={<ShieldCheck className="h-3 w-3" />}
+              enabled={!!hitlEnabled}
+              onClick={onToggleHitl}
               disabled={featuresDisabled}
             />
           )}
@@ -196,6 +203,16 @@ export function AgentPanel({
         >
           {service.variant === "engineered" ? "harness" : "bare loop"}
         </span>
+        {service.variant === "engineered" && Boolean(compactAt) && (
+          <Badge
+            variant="outline"
+            className="gap-1 border-engineered/30 text-engineered"
+            title={`Auto-compaction is active at ${compactAt! / 1000}k context tokens`}
+          >
+            <Minimize2 className="h-3 w-3" />
+            compact {compactAt! / 1000}k
+          </Badge>
+        )}
         {(service.variant === "engineered"
           ? ["explicit run state", "progress control", "safe recovery"]
           : ["implicit run state", "no progress control", "no recovery"]
@@ -279,7 +296,13 @@ interface FeatureToggleProps {
   disabled?: boolean;
 }
 
-function FeatureToggle({ label, icon, enabled, onClick, disabled }: FeatureToggleProps) {
+function FeatureToggle({
+  label,
+  icon,
+  enabled,
+  onClick,
+  disabled,
+}: FeatureToggleProps) {
   return (
     <button
       type="button"

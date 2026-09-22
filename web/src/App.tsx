@@ -1,5 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { BookOpen, Hourglass, RotateCcw, Sparkles, WifiOff } from "lucide-react";
+import {
+  BookOpen,
+  Hourglass,
+  ListChecks,
+  RotateCcw,
+  SlidersHorizontal,
+  Sparkles,
+  WifiOff,
+} from "lucide-react";
 import {
   AGENTS,
   DEFAULT_MODEL,
@@ -31,6 +39,7 @@ import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { ScenariosPanel } from "@/components/ScenariosPanel";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import type { DemoScenario, ScenarioPrompt } from "@/lib/scenarios";
 import {
@@ -50,7 +59,7 @@ const CUSTOMERS = [
 // Session budget for the agent loop's total provider usage (input + output).
 // Harness-side planner/reviewer calls and the policy MCP's one-time lookup are
 // deliberately outside this number.
-const DEFAULT_TOKEN_BUDGET = 40000;
+const DEFAULT_TOKEN_BUDGET = 160000;
 const TOKEN_BUDGET_OPTIONS = [4000, 8000, 16000, 40000, 80000, 160000];
 
 // engineered only. The line at which the harness summarizes the oldest
@@ -59,20 +68,23 @@ const TOKEN_BUDGET_OPTIONS = [4000, 8000, 16000, 40000, 80000, 160000];
 //
 // The options are scaled to what this demo actually reaches. The agent's fixed
 // surface (system prompt + tool contracts) measures ~2.6k tokens, and the mock
-// backends return small observations, so even a deliberately broad "review my
-// whole account" turn peaks near 4.3k. A line has to clear the fixed surface
-// with room to be meetable at all, and has to sit under ~6k to be crossed
-// inside a turn or two — otherwise the control looks broken on stage.
+// backends return small observations, so the lower lines are useful for a
+// single-turn demo while higher lines demonstrate compaction after context has
+// built up over several turns.
 const DEFAULT_COMPACT_AT = 0;
-const COMPACT_AT_OPTIONS = [0, 4000, 6000, 10000, 20000];
+const COMPACT_AT_OPTIONS = [0, 4000, 6000, 8000, 10000, 20000];
 
 function resultIsError(result: unknown): boolean {
   if (result && typeof result === "object" && !Array.isArray(result)) {
     return "error" in result;
   }
   if (typeof result !== "string") return false;
-  const lowered = result.toLowerCase();
-  if (lowered.includes("error executing tool") || lowered.includes("service_timeout")) {
+  // A string result only signals failure when the SDK stringified a raw
+  // exception. Do NOT sniff for error names: a skill body, a policy brief, or
+  // an escalation reason that quotes `service_timeout` is documentation about
+  // the error, not the error itself. Structured errors arrive as objects and
+  // are caught above (and the server already sets `is_error` for them).
+  if (result.toLowerCase().includes("error executing tool")) {
     return true;
   }
   try {
@@ -94,6 +106,10 @@ export default function App() {
   const [selectedModel, setSelectedModel] = useState<SupportedModel>(DEFAULT_MODEL);
   const [tokenBudget, setTokenBudget] = useState(DEFAULT_TOKEN_BUDGET);
   const [compactAt, setCompactAt] = useState(DEFAULT_COMPACT_AT);
+  const [evaluationsEnabled, setEvaluationsEnabled] = useState(false);
+  const [engineeredHitlEnabled, setEngineeredHitlEnabled] = useState(false);
+  const [controlsOpen, setControlsOpen] = useState(false);
+  const controlsRef = useRef<HTMLDivElement>(null);
   // Composer text lives in App so the Scenarios panel can pre-fill it on click.
   const [composerText, setComposerText] = useState("");
   const [scenariosOpen, setScenariosOpen] = useState(false);
@@ -112,16 +128,40 @@ export default function App() {
   const [engineeredSkillsEnabled, setEngineeredSkillsEnabled] = useState(false);
   const [engineeredEpisodicEnabled, setEngineeredEpisodicEnabled] = useState(false);
   const [engineeredPlannerEnabled, setEngineeredPlannerEnabled] = useState(false);
-  // first-cut's planner uses the same shared `planner.py` module as engineered. first-cut has
-  // no skills loader, so the planner always runs with skills_enabled=false.
-  // Independent of engineered's toggle — flip per panel.
-  const [firstCutPlannerEnabled, setFirstCutPlannerEnabled] = useState(false);
-  // Holds the toggle the user is mid-flipping while the confirm dialog is
-  // up. Cleared on confirm or cancel. Only `skills` / `episodic` need this
-  // — planner has no rebuild and skips the dialog entirely.
+  // Holds a build-time engineered toggle while the reset confirmation is up.
+  // Skills, episodic memory, and HITL change the cached Agent; planner is a
+  // per-request decision and skips the dialog entirely.
   const [pendingV2Toggle, setPendingV2Toggle] = useState<
-    { feature: "skills" | "episodic"; next: boolean } | null
+    { feature: "skills" | "episodic" | "hitl"; next: boolean } | null
   >(null);
+
+  useEffect(() => {
+    if (!controlsOpen) return;
+    const closeOutside = (event: PointerEvent) => {
+      const target = event.target;
+      if (!(target instanceof Node)) return;
+      if (controlsRef.current?.contains(target)) return;
+      // Radix Select renders its menu in a body-level portal, outside
+      // `controlsRef`. Treat those marked menus as part of the controls so a
+      // pointerdown on an option can finish before the panel is unmounted.
+      if (
+        target instanceof Element &&
+        target.closest('[data-demo-controls-portal="true"]')
+      ) {
+        return;
+      }
+      setControlsOpen(false);
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setControlsOpen(false);
+    };
+    document.addEventListener("pointerdown", closeOutside);
+    window.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("pointerdown", closeOutside);
+      window.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [controlsOpen]);
   // Tool catalog per agent — fetched once on mount. Tools don't change
   // between requests, so we don't refetch on send/reset.
   const [firstCutTools, setFirstCutTools] = useState<AgentTool[]>([]);
@@ -507,6 +547,7 @@ export default function App() {
         model: selectedModel,
         run_id: pause.run_id,
         token_budget: tokenBudget,
+        evaluation_enabled: evaluationsEnabled,
         ...(isBudget
           ? { budget_grant: true }
           : decisions
@@ -518,8 +559,9 @@ export default function App() {
               episodic_enabled: engineeredEpisodicEnabled,
               planner_enabled: engineeredPlannerEnabled,
               compact_at: compactAt,
+              hitl_enabled: engineeredHitlEnabled,
             }
-          : { planner_enabled: firstCutPlannerEnabled }),
+          : {}),
         signal: controller.signal,
         onEvent: handleEvent(variant, streamTurnId),
       });
@@ -560,6 +602,7 @@ export default function App() {
           model: selectedModel,
           run_id: comparisonRunId,
           token_budget: tokenBudget,
+          evaluation_enabled: evaluationsEnabled,
           refund_service_timeout: refundServiceTimeout,
           ...(variant === "engineered"
             ? {
@@ -567,10 +610,9 @@ export default function App() {
                 episodic_enabled: engineeredEpisodicEnabled,
                 planner_enabled: engineeredPlannerEnabled,
                 compact_at: compactAt,
+                hitl_enabled: engineeredHitlEnabled,
               }
-            : {
-                planner_enabled: firstCutPlannerEnabled,
-              }),
+            : {}),
           signal: controller.signal,
           onEvent: handleEvent(variant, turnId),
         });
@@ -630,9 +672,15 @@ export default function App() {
    *  and episodic memory are baked into the agent at build time
    *  (system_prompt / tools / plugins), the cached agent no longer matches
    *  the new toggle — so flipping requires a full engineered reset. */
-  function toggleV2Feature(feature: "skills" | "episodic") {
+  function toggleV2Feature(feature: "skills" | "episodic" | "hitl") {
     if (anyRunning) return;
-    const current = feature === "skills" ? engineeredSkillsEnabled : engineeredEpisodicEnabled;
+    if (feature === "hitl") setControlsOpen(false);
+    const current =
+      feature === "skills"
+        ? engineeredSkillsEnabled
+        : feature === "episodic"
+          ? engineeredEpisodicEnabled
+          : engineeredHitlEnabled;
     setPendingV2Toggle({ feature, next: !current });
   }
 
@@ -644,7 +692,8 @@ export default function App() {
     setPendingV2Toggle(null);
 
     if (feature === "skills") setEngineeredSkillsEnabled(next);
-    else setEngineeredEpisodicEnabled(next);
+    else if (feature === "episodic") setEngineeredEpisodicEnabled(next);
+    else setEngineeredHitlEnabled(next);
 
     await reset();
   }
@@ -707,8 +756,17 @@ export default function App() {
     }
     setSelectedScenarioId(scenario.id);
     if (scenario.model) setSelectedModel(scenario.model);
+    if (scenario.compact_at !== undefined) setCompactAt(scenario.compact_at);
     setRefundServiceTimeout(scenario.fault === "refund_service_timeout");
   }
+
+  const activeControlCount =
+    Number(selectedModel !== DEFAULT_MODEL) +
+    Number(tokenBudget !== DEFAULT_TOKEN_BUDGET) +
+    Number(refundServiceTimeout) +
+    Number(compactAt !== DEFAULT_COMPACT_AT) +
+    Number(engineeredPlannerEnabled) +
+    Number(evaluationsEnabled);
 
   return (
     <div className="flex h-full flex-col bg-aurora">
@@ -752,83 +810,155 @@ export default function App() {
             </Select>
           </Field>
 
-          <Field label="model" htmlFor="model">
-            <Select
-              value={selectedModel}
-              onValueChange={(v) => setSelectedModel(v as SupportedModel)}
-              disabled={anyRunning}
-            >
-              <SelectTrigger id="model" className="w-[160px]">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {SUPPORTED_MODELS.map((m) => (
-                  <SelectItem key={m} value={m}>
-                    {m}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </Field>
+          {refundServiceTimeout && (
+            <Badge className="hidden bg-amber-500/15 text-[10px] text-amber-700 lg:inline-flex dark:text-amber-400">
+              both · timeout armed
+            </Badge>
+          )}
 
-          <Field label="total-token budget" htmlFor="token-budget">
-            <Select
-              value={String(tokenBudget)}
-              onValueChange={(value) => setTokenBudget(Number(value))}
-              disabled={anyRunning}
+          <div ref={controlsRef} className="relative">
+            <Button
+              variant={controlsOpen ? "secondary" : "outline"}
+              size="sm"
+              onClick={() => setControlsOpen((open) => !open)}
+              aria-expanded={controlsOpen}
+              aria-controls="demo-controls"
             >
-              <SelectTrigger id="token-budget" className="w-[120px]">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {TOKEN_BUDGET_OPTIONS.map((value) => (
-                  <SelectItem key={value} value={String(value)}>
-                    {value < 1000 ? `${value} tokens` : `${value / 1000}k tokens`}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </Field>
+              <SlidersHorizontal className="h-3.5 w-3.5" />
+              controls
+              {activeControlCount > 0 && (
+                <span className="rounded-full bg-primary/10 px-1.5 text-[10px] text-primary">
+                  {activeControlCount}
+                </span>
+              )}
+            </Button>
 
-          <Field label="auto-compact at" htmlFor="compact-at">
-            <Select
-              value={String(compactAt)}
-              onValueChange={(value) => setCompactAt(Number(value))}
-              disabled={anyRunning}
-            >
-              <SelectTrigger id="compact-at" className="w-[120px]">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {COMPACT_AT_OPTIONS.map((value) => (
-                  <SelectItem key={value} value={String(value)}>
-                    {value === 0 ? "off" : `${value / 1000}k context`}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </Field>
+            {controlsOpen && (
+              <div
+                id="demo-controls"
+                className="absolute right-0 top-full z-50 mt-2 w-[360px] rounded-xl border bg-popover p-4 text-popover-foreground shadow-xl"
+              >
+                <div className="mb-3">
+                  <div className="text-sm font-semibold">Demo controls</div>
+                  <div className="text-[11px] text-muted-foreground">
+                    Defaults stay out of the presentation header.
+                  </div>
+                </div>
 
-          <button
-            type="button"
-            disabled={anyRunning}
-            onClick={() => setRefundServiceTimeout((enabled) => !enabled)}
-            aria-pressed={refundServiceTimeout}
-            title="One-shot fault: the next refund service call times out before commit"
-            className={cn(
-              "inline-flex h-9 items-center gap-1.5 rounded-md border px-2.5 text-xs transition-colors",
-              "disabled:cursor-not-allowed disabled:opacity-50",
-              refundServiceTimeout
-                ? "border-amber-500/50 bg-amber-500/15 text-amber-700 dark:text-amber-400"
-                : "border-input bg-background text-muted-foreground hover:bg-accent",
+                <div className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                  Both agents
+                </div>
+                <div className="mt-2 space-y-2">
+                  <ControlRow label="Model">
+                    <Select
+                      value={selectedModel}
+                      onValueChange={(value) => setSelectedModel(value as SupportedModel)}
+                      disabled={anyRunning}
+                    >
+                      <SelectTrigger id="model" className="w-[170px]">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent data-demo-controls-portal="true">
+                        {SUPPORTED_MODELS.map((model) => (
+                          <SelectItem key={model} value={model}>
+                            {model}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </ControlRow>
+                  <ControlRow label="Token budget">
+                    <Select
+                      value={String(tokenBudget)}
+                      onValueChange={(value) => setTokenBudget(Number(value))}
+                      disabled={anyRunning}
+                    >
+                      <SelectTrigger id="token-budget" className="w-[170px]">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent data-demo-controls-portal="true">
+                        {TOKEN_BUDGET_OPTIONS.map((value) => (
+                          <SelectItem key={value} value={String(value)}>
+                            {value / 1000}k tokens
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </ControlRow>
+                  <ControlRow label="Evaluations">
+                    <ControlToggle
+                      label="LLM judges"
+                      enabled={evaluationsEnabled}
+                      disabled={anyRunning}
+                      onClick={() => setEvaluationsEnabled((enabled) => !enabled)}
+                    />
+                  </ControlRow>
+                  <ControlRow label="Refund fault">
+                    <button
+                      type="button"
+                      disabled={anyRunning}
+                      onClick={() => setRefundServiceTimeout((enabled) => !enabled)}
+                      aria-pressed={refundServiceTimeout}
+                      className={cn(
+                        "inline-flex h-9 w-[170px] items-center justify-between rounded-md border px-3 text-xs transition-colors",
+                        "disabled:cursor-not-allowed disabled:opacity-50",
+                        refundServiceTimeout
+                          ? "border-amber-500/50 bg-amber-500/15 text-amber-700 dark:text-amber-400"
+                          : "border-input bg-background text-muted-foreground hover:bg-accent",
+                      )}
+                    >
+                      <span className="inline-flex items-center gap-1.5">
+                        <WifiOff className="h-3.5 w-3.5" /> timeout next
+                      </span>
+                      <span className="uppercase opacity-70">
+                        {refundServiceTimeout ? "armed" : "off"}
+                      </span>
+                    </button>
+                  </ControlRow>
+                </div>
+
+                <div className="my-3 border-t" />
+                <div className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                  Agent-level
+                </div>
+                <div className="mt-2 space-y-2">
+                  <ControlRow label="Engineered planner">
+                    <ControlToggle
+                      label="planner"
+                      enabled={engineeredPlannerEnabled}
+                      disabled={anyRunning}
+                      onClick={() => setEngineeredPlannerEnabled((enabled) => !enabled)}
+                    />
+                  </ControlRow>
+                </div>
+
+                <div className="my-3 border-t" />
+                <div className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                  Engineered loop only
+                </div>
+                <div className="mt-2 space-y-2">
+                  <ControlRow label="Auto-compact">
+                    <Select
+                      value={String(compactAt)}
+                      onValueChange={(value) => setCompactAt(Number(value))}
+                      disabled={anyRunning}
+                    >
+                      <SelectTrigger id="compact-at" className="w-[170px]">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent data-demo-controls-portal="true">
+                        {COMPACT_AT_OPTIONS.map((value) => (
+                          <SelectItem key={value} value={String(value)}>
+                            {value === 0 ? "off" : `${value / 1000}k context`}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </ControlRow>
+                </div>
+              </div>
             )}
-          >
-            <WifiOff className="h-3.5 w-3.5" />
-            timeout next refund
-            <span className="text-[10px] uppercase tracking-wider opacity-70">
-              {refundServiceTimeout ? "armed" : "off"}
-            </span>
-          </button>
+          </div>
 
           <Button
             variant={scenariosOpen ? "secondary" : "outline"}
@@ -882,14 +1012,6 @@ export default function App() {
                 answerPause("first_cut", turn, approved, decisions)
               }
               pauseBusy={anyRunning}
-              plannerEnabled={firstCutPlannerEnabled}
-              onTogglePlanner={() => {
-                // Planner toggle is per-request — no agent rebuild, no
-                // confirm dialog, no reset. Same shape as engineered's planner
-                // toggle, just independent state.
-                if (anyRunning) return;
-                setFirstCutPlannerEnabled((v) => !v);
-              }}
               featuresDisabled={anyRunning}
             />
             <AgentPanel
@@ -906,16 +1028,11 @@ export default function App() {
               pauseBusy={anyRunning}
               skillsEnabled={engineeredSkillsEnabled}
               episodicEnabled={engineeredEpisodicEnabled}
-              plannerEnabled={engineeredPlannerEnabled}
+              hitlEnabled={engineeredHitlEnabled}
+              compactAt={compactAt}
               onToggleSkills={() => toggleV2Feature("skills")}
               onToggleEpisodic={() => toggleV2Feature("episodic")}
-              onTogglePlanner={() => {
-                // Planner toggle is per-request — no agent rebuild, no
-                // confirm dialog, no reset. The next /api/run picks up
-                // the new value via the request body.
-                if (anyRunning) return;
-                setEngineeredPlannerEnabled((v) => !v);
-              }}
+              onToggleHitl={() => toggleV2Feature("hitl")}
               featuresDisabled={anyRunning}
               customerId={customerId}
               memoryRefreshKey={engineeredMemoryRefreshKey}
@@ -949,12 +1066,20 @@ export default function App() {
         title={
           pendingV2Toggle
             ? `Turn ${pendingV2Toggle.next ? "on" : "off"} ${
-                pendingV2Toggle.feature === "skills" ? "skills" : "episodic memory"
+                pendingV2Toggle.feature === "skills"
+                  ? "skills"
+                  : pendingV2Toggle.feature === "episodic"
+                    ? "episodic memory"
+                    : "human approval"
               }?`
             : ""
         }
         description="This triggers a full reset, same as the reset button. Both agents' chat history and mock data will be cleared, and the engineered agent's non-seed episodic memory will be wiped."
-        confirmLabel="reset"
+        confirmLabel={
+          pendingV2Toggle
+            ? `reset & turn ${pendingV2Toggle.next ? "on" : "off"}`
+            : "reset"
+        }
         destructive
         onConfirm={confirmV2Toggle}
         onCancel={() => setPendingV2Toggle(null)}
@@ -980,5 +1105,47 @@ function Field({ label, htmlFor, children }: FieldProps) {
       </label>
       {children}
     </div>
+  );
+}
+
+function ControlRow({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div className="flex items-center justify-between gap-3">
+      <span className="text-xs text-muted-foreground">{label}</span>
+      {children}
+    </div>
+  );
+}
+
+function ControlToggle({
+  label,
+  enabled,
+  disabled,
+  onClick,
+}: {
+  label: string;
+  enabled: boolean;
+  disabled?: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      disabled={disabled}
+      onClick={onClick}
+      aria-pressed={enabled}
+      className={cn(
+        "inline-flex h-9 w-[170px] items-center justify-between rounded-md border px-3 text-xs transition-colors",
+        "disabled:cursor-not-allowed disabled:opacity-50",
+        enabled
+          ? "border-primary/40 bg-primary/10 text-primary"
+          : "border-input bg-background text-muted-foreground hover:bg-accent",
+      )}
+    >
+      <span className="inline-flex items-center gap-1.5">
+        <ListChecks className="h-3.5 w-3.5" /> {label}
+      </span>
+      <span className="uppercase opacity-70">{enabled ? "on" : "off"}</span>
+    </button>
   );
 }
