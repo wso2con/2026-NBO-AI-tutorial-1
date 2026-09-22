@@ -479,6 +479,10 @@ async def _run_agent_stream(
                     continue
                 body = _extract_tool_result_body(block)
                 summary, is_err = _summarize_result(slot["name"], body)
+                # The protocol carries its own failure flag. Honour it so an
+                # unstructured failure (a raw exception the SDK stringified)
+                # is flagged here rather than left to the UI to sniff for.
+                is_err = is_err or tr.get("status") == "error"
                 yield {
                     "event": "tool_result",
                     "data": json.dumps(
@@ -580,15 +584,17 @@ class RunRequest(BaseModel):
     customer_id: str
     model: str | None = None  # Per-request override; falls back to PROFILE.model.
     # UI toggles for engineered features. Null falls back to profile defaults.
-    # `skills_enabled` and `episodic_enabled` require a session reset (the
-    # agent is cached and its system_prompt / tools / plugins are baked at
-    # build time), so the frontend calls /api/reset before sending a request
-    # with new values. `planner_enabled` is a per-request decision (the
+    # `skills_enabled`, `episodic_enabled`, and `hitl_enabled` require a
+    # session reset (the agent is cached and its prompt, tools, plugins, and
+    # hooks are baked at build time), so the frontend calls /api/reset before
+    # sending a request with new values. `planner_enabled` is a per-request decision (the
     # planner is a separate LLM call, not part of the agent build), so it
     # can flip freely without a reset.
     skills_enabled: bool | None = None
     episodic_enabled: bool | None = None
     planner_enabled: bool | None = None
+    # Optional post-turn LLM reviews. Off unless the presenter enables them.
+    evaluation_enabled: bool = False
     run_id: str | None = None
     token_budget: int | None = None
     # Auto-compaction line, in projected input tokens for the next model call.
@@ -596,7 +602,11 @@ class RunRequest(BaseModel):
     # `skills_enabled`, this is a live dial: it applies to the next model call
     # of the session in flight, with no reset.
     compact_at: int | None = None
-    # One-shot demo fault: the next refund service call times out pre-commit.
+    # Build-time human-approval gate for customer-visible writes. Changing it
+    # requires the same reset/rebuild as Skills and episodic memory.
+    hitl_enabled: bool | None = None
+    # One-shot demo fault: the next refund service call commits the write,
+    # then times out before acknowledging it.
     refund_service_timeout: bool = False
     # Answers to the two pauses the console renders inline, both structured
     # rather than read out of prose. `budget_grant` answers
@@ -730,6 +740,7 @@ async def run(req: RunRequest):
         skills_enabled=req.skills_enabled,
         episodic_enabled=req.episodic_enabled,
         planner_enabled=req.planner_enabled,
+        hitl_enabled=req.hitl_enabled,
     )
     agent = get_agent(req.customer_id, effective_profile)
     # The fault is one-shot and disk-backed, so it outlives the turn that armed
@@ -1098,9 +1109,9 @@ async def run(req: RunRequest):
                         yield loop_event(
                             "recovery",
                             run_state,
-                            "Refund service timed out before completing the write",
+                            "Refund service did not acknowledge the write; outcome unknown",
                             fault="refund_service_timeout",
-                            decision="escalate_without_retry",
+                            decision="verify_then_escalate",
                         )
                     if body.get("name") == "skills":
                         skill_name = skill_calls.get(body.get("tool_use_id", ""), "")
@@ -1397,6 +1408,10 @@ async def run(req: RunRequest):
                 ),
             }
 
+            if not req.evaluation_enabled:
+                run_state.evaluation_status = "skipped"
+                return
+
             # --- Post-turn evaluation -----------------------------------
             #
             # Enforcement happened BEFORE the actions, at the tool boundary,
@@ -1432,6 +1447,7 @@ async def run(req: RunRequest):
                     customer_request=task_request,
                     proposed_reply=proposed_reply,
                     tool_history=run_state.tool_history,
+                    tool_specs=tools,
                     declared_contract=declared_contract,
                     refund_cap_usd=effective_profile.refund_cap_usd,
                 ):
@@ -1535,7 +1551,7 @@ def end_session(req: EndSessionRequest) -> dict[str, Any]:
     """Simulate 'time has passed' for the §5 episodic-memory demo. Drops the
     cached Agent for the given customer so the next request rebuilds it
     fresh — which wipes `agent.messages` (conversation memory) but RELOADS
-    the customer's episodic memory file into the new system prompt. Mock
+    the customer's episodic memory file into the first user message. Mock
     backend state (orders, refunds, tickets) is untouched."""
     if req.customer_id:
         _AGENTS.pop(req.customer_id, None)

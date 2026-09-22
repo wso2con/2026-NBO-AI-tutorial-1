@@ -1,30 +1,7 @@
-# Customer memory — cust_002 (Bob Martinez)
+# Customer memory — cust_002
 
-Episodic memory holds **pointers and observations**, not data. Verify every
-pointer with a tool call before acting on it — the audit ledger and orders
-API are the source of truth; this file is just notes from past interactions.
+## Durable context
 
-## Open promises (verify before replying)
-
-- **2026-09-10** — Promised Bob a replacement for order #2246 (pour-over
-  dripper set) by ~2026-09-15. Tracked via TICKET-1001 (warehouse / batch-QC
-  investigation). Look it up via `get_open_tickets(cust_002)` before
-  responding to anything about #2246.
-
-## Observations
-
-- **2026-09-10** — SECOND damaged delivery to Lindenstrasse, Munich within
-  6 months. Pattern is fulfillment-side, not customer-side. Don't gaslight
-  Bob as a one-off.
-- Tone on the prior call: understanding but pointed. He is keeping score.
-
-## How to handle Bob
-
-- Call `get_open_tickets(cust_002)` to confirm TICKET-1001's status. If
-  it's still `open` with no warehouse progress, escalate priority `high`
-  and reference TICKET-1001 in the new ticket's reason.
-- The replacement was promised, not shipped. Confirm current state with
-  `get_order("2246")` before repeating the promise back to him.
-- Check `get_refund_history(cust_002)` before any payout — settle what has
-  already been paid rather than assuming nothing has.
-- Customer tier / tenure / contact info → `lookup_customer`, not this file.
+- **Promise · 2026-09-10:** Bob was promised a replacement for #2246 by approximately 2026-09-15. TICKET-1001 is the pointer; verify the current order and ticket before replying.
+- **Pattern · 2026-09-10:** Bob described this as the second damaged delivery to the same address within six months. Treat it as a possible recurring fulfillment issue, but verify current records.
+- **Communication preference:** Bob was understanding but pointed and expects clear ownership, concrete status, and dates rather than generic reassurance.

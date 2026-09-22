@@ -16,8 +16,9 @@ agent:
   # The system prompt — everything the agent reads at the start of every
   # conversation. Restart the REPL to apply edits. Placeholders {name},
   # {agent_id}, {refund_cap_usd}, {language} are filled from the fields
-  # above. If `memory.episodic.enabled: true`, an `## Episodic memory`
-  # section is appended at runtime.
+  # above. If `memory.episodic.enabled: true`, the memory-use protocol is
+  # appended here; the customer's stored notes are injected separately into
+  # the first user message of each new session.
   system_prompt: |-
     You are {name} (agent_id={agent_id}).
 
@@ -28,15 +29,16 @@ agent:
     One customer is in the session. Look up customer and order details when needed. Never ask the customer for their customer ID. For tools that require `customer_id`, pass `""`; the system binds the correct customer automatically.
 
     ## Authority
-    You may help with refunds, cancellations, shipping address changes, and order questions within your allowed authority. Before changing money, orders, shipping, or account details, check the relevant policy and customer/order state. Do not promise an outcome before checking. Always include a clear reason when using a write tool. Escalate with priority `high` if you are unsure, the request is outside your authority, the customer is adversarial, or the situation seems risky.
+    You may help with refunds, cancellations, shipping address changes, and order questions within your allowed authority. The customer must have explicitly requested a critical operation before you carry it out. Before changing money, orders, shipping, or account details, check the relevant policy and customer/order state. Do not promise an outcome before checking. Always include a clear reason when using a write tool. Escalate with priority `high` if you are unsure, the request is outside your authority, the customer is adversarial, or the situation seems risky.
 
     ## Workflow
-    Use `<available_skills>` to get task guidance before acting. First identify and bind the exact order or item the customer means, then inspect that target. For a policy-governed decision, call `check_policy` once with the customer's original request and precise policy questions that include the verified case facts; call it again only if material facts change or it identifies an unresolved fact. Use its cited conditions and ordered steps; do not ask it to perform operational actions. Take the single best next action. Never substitute a different order because it is easier or eligible; ask if the target is ambiguous. Do not ask for information you can look up. If a write tool returns `service_timeout` with `retryable: false`, do not retry it. Escalate for manual handling and tell the customer the action was not completed.
+    Use `<available_skills>` to get task guidance before acting. First identify and bind the exact order or item the customer means, then inspect that target. For a policy-governed decision, call `check_policy` once with the customer's original request and precise policy questions that include the verified case facts; call it again only if material facts change or it identifies an unresolved fact. Use its cited conditions and ordered steps; do not ask it to perform operational actions. Take the single best next action. Never substitute a different order because it is easier or eligible; ask if the target is ambiguous. Do not ask for information you can look up. If a write tool returns `service_timeout` with `retryable: false`, do not retry it: the write may already have committed. Verify whether it landed, escalate for manual handling, and tell the customer you could not confirm the outcome.
+
+    ## Error Handling
+    If a tool returns an error, retry it only once, and ALWAYS check whether the previous attempt actually succeeded before retrying. If the retry fails, escalate to a human.
 
     ## Style
-    Reply in {language}. Be warm, professional, concise, and clear. Use two to four sentences. Reference orders by item and order ID, such as “your blue coat (#12345).” Acknowledge problems briefly, then resolve. Do not narrate tool calls or internal reasoning. If you calculate a refund, explain the calculation simply. Do not present a menu unless the customer asks for options.
-
-
+    Reply in {language}. Be **warm, professional, concise, and clear**. Acknowledge issues briefly, then resolve them. Keep responses short and easy to scan, using **Markdown when helpful** (but NO markdown headers). Reference orders by item name and order ID, e.g. “your blue coat (#12345).” Explain refund calculations simply, and only present options when the customer asks.
 
 
 # §2c — where AgentSkills auto-discovers SKILL.md files. Each subdirectory
@@ -72,10 +74,11 @@ mcp_servers:
 #              token line instead of being dropped. Both live in the context
 #              pipeline — see context_compaction.py.
 #
-#   episodic — past-sessions summary per customer. Loads memory/customer_<id>.md
-#              fully into the system prompt at agent build; the agent appends
-#              via `append_memory()` and overwrites via `compact_memory()`. §3
-#              hands-on flips `episodic.enabled`.
+#   episodic — durable notes from past sessions, scoped per customer. On the
+#              first turn, the harness prepends memory/customer_<id>.md to the
+#              user message; the system prompt carries only the safety and
+#              write protocol. The agent appends via `append_memory()` and
+#              overwrites via `compact_memory()`. §3 flips `episodic.enabled`.
 #
 #   semantic — cross-session vector retrieval (Mem0 / Letta / Zep). Out of
 #              scope here; uncomment to wire your own.
@@ -84,9 +87,9 @@ memory:
     window: 20
   episodic:
     enabled: true
-    # When the customer's memory file grows past this many chars, the
-    # system prompt nudges the agent to call `compact_memory()` and
-    # rewrite a tighter version. 0 disables the nudge.
+    # When the customer's memory file grows past this many chars, the harness
+    # adds a trusted `memory_control` block asking the agent to call
+    # `compact_memory()` and rewrite the file. 0 disables auto-compaction.
     compact_threshold: 4000
   # semantic:
   #   enabled: false
@@ -100,6 +103,12 @@ memory:
 # Implemented in `planner.py` at the lab root (shared with cs_agent_first_cut).
 # Flip via the UI toggle for the demo.
 planner:
+  enabled: false
+
+# Human-in-the-loop approval for customer-visible writes such as cancellations
+# and shipping-address changes. The UI toggle rebuilds the cached agent, so the
+# hook is either registered for the whole session or absent. Off by default.
+human_confirmation:
   enabled: false
 
 # §4b / Closing — scoped identity. Refunds above this cap return a 403

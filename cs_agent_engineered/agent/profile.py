@@ -26,8 +26,8 @@ class EpisodicMemory:
     # injected into the first user message of a new session (see
     # agent/core.py::prepend_memory).
     enabled: bool = False
-    # Char-count above which the system prompt nudges the agent to call
-    # `compact_memory()` to summarize. 0 disables the nudge.
+    # Char-count above which the harness adds a trusted `memory_control` block
+    # asking the agent to call `compact_memory()`. 0 disables the request.
     compact_threshold: int = 4000
 
 
@@ -76,6 +76,7 @@ class Profile:
     mcp_servers: list[MCPServerConfig]
     memory: MemoryConfig
     planner: PlannerConfig
+    hitl_enabled: bool
     refund_cap_usd: float
 
 
@@ -84,10 +85,12 @@ def apply_overrides(
     skills_enabled: bool | None = None,
     episodic_enabled: bool | None = None,
     planner_enabled: bool | None = None,
+    hitl_enabled: bool | None = None,
 ) -> Profile:
     """Return a Profile copy with UI toggle overrides applied. `None` keeps
     the YAML default. Disabling skills wipes `skills_dir`; disabling episodic
-    flips `memory.episodic.enabled`; toggling the planner flips
+    flips `memory.episodic.enabled`; toggling HITL controls whether the
+    confirmation hook is registered; toggling the planner flips
     `planner.enabled` (a per-request decision — no agent rebuild needed).
     The returned Profile is the single source of truth for `build_agent`
     and the per-request planner gate — no extra flag plumbing required."""
@@ -95,6 +98,7 @@ def apply_overrides(
         skills_enabled is None
         and episodic_enabled is None
         and planner_enabled is None
+        and hitl_enabled is None
     ):
         return profile
 
@@ -111,6 +115,7 @@ def apply_overrides(
         skills_dir=new_skills_dir,
         memory=replace(profile.memory, episodic=new_episodic),
         planner=new_planner,
+        hitl_enabled=profile.hitl_enabled if hitl_enabled is None else hitl_enabled,
     )
 
 
@@ -135,6 +140,12 @@ def load_profile(path: Path = PROFILE_PATH) -> Profile:
         planner_section = {"enabled": planner_section}
     elif planner_section is None:
         planner_section = {}
+    hitl_section = raw.get("human_confirmation", {})
+    # Tolerate `human_confirmation: true` as well as `{enabled: true}`.
+    if isinstance(hitl_section, bool):
+        hitl_section = {"enabled": hitl_section}
+    elif hitl_section is None:
+        hitl_section = {}
     mcp_section = raw.get("mcp_servers") or []
 
     mcp_servers = [
@@ -165,5 +176,6 @@ def load_profile(path: Path = PROFILE_PATH) -> Profile:
         planner=PlannerConfig(
             enabled=bool(planner_section.get("enabled", False)),
         ),
+        hitl_enabled=bool(hitl_section.get("enabled", False)),
         refund_cap_usd=float(raw.get("refund_cap_usd", 200.0)),
     )
