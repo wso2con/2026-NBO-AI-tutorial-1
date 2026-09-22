@@ -92,7 +92,7 @@ class RunState:
     # extension the customer has approved (`token_ceiling`). The meter
     # accumulates across every turn of the task, so a "yes" resumes into a
     # bigger ceiling rather than a cleared meter — otherwise work could never end.
-    token_budget: int = 40_000
+    token_budget: int = 160_000
     budget_grants: int = 0
     # Summed from each model call's own reported usage, so both survive multiple
     # turns of one task and an agent instance shared with other runs.
@@ -207,7 +207,7 @@ class RunStore:
             # about to happen, not to the one that set it.
             run.budget_wrapup = False
             if is_new:
-                run.token_budget = max(1_000, min(int(token_budget or 40_000), 500_000))
+                run.token_budget = max(1_000, min(int(token_budget or 160_000), 500_000))
                 run.budget_grants = 0
                 run.output_tokens = 0
                 run.input_tokens = 0
