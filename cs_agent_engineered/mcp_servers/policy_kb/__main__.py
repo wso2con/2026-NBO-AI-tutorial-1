@@ -11,6 +11,13 @@ around the same corpus:
 
 The customer-support model therefore does not have to carry source policy
 documents through the rest of its tool loop.
+
+Runs over stdio by default (agent/core.py spawns it), or over HTTP:
+
+    python -m mcp_servers.policy_kb --transport http
+
+Every `check_policy` call spends OpenAI credits, so an open HTTP port here
+is an open tab on your API bill.
 """
 
 from __future__ import annotations
@@ -33,6 +40,7 @@ if str(_LAB_ROOT) not in sys.path:
 
 from mcp.server.fastmcp import FastMCP  # noqa: E402
 from policies.search import search as search_policies  # noqa: E402
+from mcp_servers._serve import serve  # noqa: E402
 
 
 _POLICY_ADVISOR_PROMPT = """You are the policy decision service for a customer-support agent.
@@ -73,7 +81,22 @@ Rules:
 - Return JSON only.
 """
 
-mcp = FastMCP("policy-advisor")
+_INSTRUCTIONS = """Policy decision service for customer support. One tool, `check_policy`.
+
+It exists to keep policy documents out of your context. Ask it a question and
+it searches the corpus, reads the top candidates behind the boundary, and
+returns only a short cited brief: what is allowed, what it is conditional on,
+what the customer is owed net of prior refunds, and the ordered steps to take.
+You never receive the source documents.
+
+Consult it before promising or taking any action that moves money or changes
+an order, and after you have the case facts — the quality of the brief depends
+entirely on the facts you put in the questions. It interprets policy only: it
+performs no refunds, cancellations or escalations, and knows nothing about
+your backend's state beyond what you tell it.
+"""
+
+mcp = FastMCP("policy-advisor", instructions=_INSTRUCTIONS)
 
 
 def _candidate_block(candidates: list[dict]) -> str:
@@ -173,23 +196,39 @@ def _normalize(payload: object, candidates: list[dict]) -> dict:
 
 @mcp.tool()
 def check_policy(customer_request: str, policy_questions: list[str]) -> dict:
-    """Return a case-specific policy decision brief.
+    """Ask what policy allows in this specific case, and get back a cited brief.
 
-    Call after gathering the customer/order facts needed to frame the policy
-    question, and before promising or taking a policy-governed action.
-    Call once for the current decision; call again only if material case facts
-    change or the returned brief identifies a fact that must be verified.
+    Call after gathering the case facts and before promising or taking any
+    policy-governed action. Once per decision: call again only if material
+    facts change, or if the brief names a fact you must go and verify.
 
-    `customer_request` is the customer's original request in their own words.
-    `policy_questions` contains one or more precise questions for the policy
-    service. Include relevant verified facts in those questions, such as order
-    status, days late, amount, prior-refund percentage, or whether photo
-    evidence is on file. Do not paste complete tool results.
+    Args:
+        customer_request: The customer's request in their own words, not your
+            paraphrase — wording carries the intent the policy turns on.
+        policy_questions: One or more precise questions, each carrying the
+            verified facts it depends on. This is the whole skill of using
+            this tool. "Is this refundable?" returns something vague; "Order
+            is delivered_damaged, $72, photos on file, 20% already refunded —
+            what is owed net?" returns an answer you can act on. Include
+            status, amounts, dates, lateness, evidence and prior refunds.
+            Ask about policy, not operations. Do not paste raw tool results.
 
-    The service searches the policy corpus, reads the top three candidates,
-    and returns only the applicable conditions, ordered required steps,
-    prohibited actions, unresolved facts, and cited policy IDs. It does not
-    perform refunds, cancellations, address changes, or escalations.
+    Returns:
+        A brief, never the source documents:
+        - `decision`: `allowed`, `not_allowed`, `allowed_after_conditions`,
+          `needs_human_review`, or `insufficient_policy`. The last two mean
+          escalate — do not improvise past them.
+        - `applicable_policies`: cited `id`, `title`, `applies_because`
+        - `entitlement`: present whenever money moves, else null. Carries
+          `category_percentage`, the `offsets` already given on this order,
+          the `net` owed after them, and whether that `net` is within your
+          authority. The arithmetic is done for you; use `net` as given.
+        - `conditions`, `required_steps` (in execution order),
+          `prohibited_actions`, `facts_to_verify`
+        - `customer_explanation`: plain wording you may adapt
+
+        It interprets policy only. It cannot refund, cancel, change an
+        address or escalate, and it never confirms that an action happened.
     """
     clean_request = " ".join(customer_request.split()).strip()
     clean_questions = [
@@ -259,4 +298,6 @@ def check_policy(customer_request: str, policy_questions: list[str]) -> dict:
 
 
 if __name__ == "__main__":
-    mcp.run(transport="stdio")
+    # stdio by default — that is what agent/core.py spawns. Pass
+    # `--transport http` to serve the same tools over the network instead.
+    raise SystemExit(serve(mcp, "policy_kb"))
